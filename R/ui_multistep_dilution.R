@@ -1,0 +1,130 @@
+# ==============================================================================
+# ui_multistep_dilution.R
+# UI and server logic for Multi-Step Dilution Planner tab
+# ==============================================================================
+
+multistep_dilution_ui <- function(id) {
+  ns <- NS(id)
+
+  tagList(
+    fluidRow(
+      column(4,
+        wellPanel(
+          h4("Input Parameters"),
+          textInput(ns("solution_name"), "Solution name (optional)", placeholder = "e.g. Serial dilution of Ab"),
+          hr(),
+          fluidRow(
+            column(9, numericInput(ns("stock_val"), "Stock concentration", value = 10, min = 0, step = 0.1)),
+            column(3, selectInput(ns("stock_unit"), " ", choices = ALL_CONC_UNITS, selected = "mg/ml"))
+          ),
+          fluidRow(
+            column(9, numericInput(ns("target_val"), "Target concentration", value = 1, min = 0, step = 0.001)),
+            column(3, selectInput(ns("target_unit"), " ", choices = ALL_CONC_UNITS, selected = "ng/ml"))
+          ),
+          fluidRow(
+            column(9, numericInput(ns("final_vol"), "Final volume", value = 10, min = 0, step = 0.1)),
+            column(3, selectInput(ns("final_vol_unit"), " ", choices = VOLUME_UNITS, selected = "ml"))
+          ),
+          textInput(ns("diluent"), "Diluent", value = "PBS"),
+          hr(),
+          h5("Planner Settings"),
+          numericInput(ns("max_df"), "Max DF per step", value = 500, min = 2, max = 10000, step = 10),
+          numericInput(ns("min_pipette"), "Min pipetting volume (\u00b5l)", value = 0.5, min = 0.1, max = 10, step = 0.1),
+          numericInput(ns("intermediate_vol"), "Preferred intermediate volume (\u00b5l)", value = 500, min = 50, max = 50000, step = 50)
+        )
+      ),
+      column(8,
+        wellPanel(
+          h4("Dilution Plan"),
+          uiOutput(ns("warnings_ui")),
+          verbatimTextOutput(ns("instruction_text")),
+          hr(),
+          fluidRow(
+            column(4, actionButton(ns("save_btn"), "Save to Memory", class = "btn-success", width = "100%")),
+            column(4, actionButton(ns("clear_btn"), "Clear", class = "btn-default", width = "100%"))
+          )
+        ),
+        wellPanel(
+          h4("Step Details"),
+          tableOutput(ns("steps_table"))
+        )
+      )
+    )
+  )
+}
+
+multistep_dilution_server <- function(id, memory) {
+  moduleServer(id, function(input, output, session) {
+
+    result <- reactive({
+      req(input$stock_val, input$target_val, input$final_vol)
+      req(input$stock_val > 0, input$target_val > 0, input$final_vol > 0)
+      req(input$max_df, input$min_pipette, input$intermediate_vol)
+
+      val <- validate_single_dilution(
+        input$stock_val, input$stock_unit,
+        input$target_val, input$target_unit,
+        input$final_vol, input$final_vol_unit
+      )
+      req(val$ok)
+
+      plan_multistep_dilution(
+        stock_val = input$stock_val,
+        stock_unit = input$stock_unit,
+        target_val = input$target_val,
+        target_unit = input$target_unit,
+        final_vol = input$final_vol,
+        final_vol_unit = input$final_vol_unit,
+        diluent = input$diluent,
+        solution_name = input$solution_name,
+        max_df_per_step = input$max_df,
+        min_pipette_vol_ul = input$min_pipette,
+        preferred_intermediate_vol_ul = input$intermediate_vol
+      )
+    })
+
+    output$instruction_text <- renderText({
+      req(result())
+      result()$instruction_text
+    })
+
+    output$warnings_ui <- renderUI({
+      req(result())
+      w <- result()$warnings
+      if (length(w) == 0) return(NULL)
+      tags$div(class = "alert alert-warning",
+        tags$strong("Warnings:"),
+        tags$ul(lapply(w, tags$li))
+      )
+    })
+
+    output$steps_table <- renderTable({
+      req(result())
+      steps <- result()$steps
+      conc_type <- result()$normalized_parameters$conc_type
+
+      do.call(rbind, lapply(steps, function(s) {
+        data.frame(
+          Step = s$step,
+          Source = s$source_label,
+          `Take` = format_volume(s$stock_volume_L),
+          `Add Diluent` = format_volume(s$diluent_volume_L),
+          `Step DF` = format_df(s$dilution_factor),
+          `Result Conc` = format_concentration(s$result_conc_internal, conc_type),
+          stringsAsFactors = FALSE,
+          check.names = FALSE
+        )
+      }))
+    }, striped = TRUE, hover = TRUE, width = "100%")
+
+    observeEvent(input$save_btn, {
+      req(result())
+      memory(save_to_memory(memory(), result()))
+      showNotification("Saved to memory!", type = "message", duration = 2)
+    })
+
+    observeEvent(input$clear_btn, {
+      # placeholder
+    })
+  })
+}

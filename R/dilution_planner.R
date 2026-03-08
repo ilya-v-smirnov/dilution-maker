@@ -1,0 +1,163 @@
+# ==============================================================================
+# dilution_planner.R
+# Multi-step dilution planner: splits large DF into sequential steps
+# ==============================================================================
+
+#' Plan a multi-step dilution
+#'
+#' @param stock_val Stock concentration value
+#' @param stock_unit Stock concentration unit
+#' @param target_val Target concentration value
+#' @param target_unit Target concentration unit
+#' @param final_vol Final volume value
+#' @param final_vol_unit Final volume unit
+#' @param diluent Diluent name
+#' @param solution_name Optional label
+#' @param max_df_per_step Maximum dilution factor per step (default 500)
+#' @param min_pipette_vol_ul Minimum pipetting volume in µl (default 0.5)
+#' @param preferred_intermediate_vol_ul Preferred intermediate volume in µl (default 500)
+#' @return Structured result object with multiple steps
+plan_multistep_dilution <- function(stock_val, stock_unit,
+                                    target_val, target_unit,
+                                    final_vol, final_vol_unit,
+                                    diluent = "PBS",
+                                    solution_name = "",
+                                    max_df_per_step = 500,
+                                    min_pipette_vol_ul = 0.5,
+                                    preferred_intermediate_vol_ul = 500) {
+
+  # Normalize
+
+  stock_norm <- normalize_concentration(stock_val, stock_unit)
+  target_norm <- normalize_concentration(target_val, target_unit)
+  vol_norm <- normalize_volume(final_vol, final_vol_unit)
+
+  conc_type <- stock_norm$type
+  total_df <- stock_norm$value / target_norm$value
+  final_vol_L <- vol_norm$value
+
+  # Determine number of steps needed
+  if (total_df <= max_df_per_step) {
+    n_steps <- 1
+  } else {
+    n_steps <- ceiling(log(total_df) / log(max_df_per_step))
+  }
+
+  # Calculate DF per step (equal geometric distribution)
+  df_per_step <- total_df^(1 / n_steps)
+
+  # Build steps
+  steps <- list()
+  warnings <- character(0)
+  current_conc <- stock_norm$value
+  intermediate_vol_L <- volume_to_L(preferred_intermediate_vol_ul, "\u00b5l")
+
+  for (i in seq_len(n_steps)) {
+    is_last <- (i == n_steps)
+    step_target_conc <- current_conc / df_per_step
+
+    # For last step use the actual final volume; intermediates use preferred vol
+    if (is_last) {
+      step_final_vol_L <- final_vol_L
+    } else {
+      step_final_vol_L <- intermediate_vol_L
+    }
+
+    # Calculate volumes (use approximation if DF > 100)
+    if (df_per_step > 100) {
+      stock_vol_L <- step_final_vol_L / df_per_step
+      diluent_vol_L <- step_final_vol_L
+    } else {
+      stock_vol_L <- step_final_vol_L / df_per_step
+      diluent_vol_L <- step_final_vol_L - stock_vol_L
+    }
+
+    # Pipetting warnings
+    step_warnings <- pipetting_warnings(stock_vol_L)
+    if (length(step_warnings) > 0) {
+      step_warnings <- paste0("Step ", i, ": ", step_warnings)
+      warnings <- c(warnings, step_warnings)
+    }
+
+    # Source label
+    if (i == 1) {
+      source_label <- "stock"
+    } else {
+      source_label <- paste0("intermediate ", i - 1)
+    }
+
+    steps[[i]] <- list(
+      step = i,
+      source_label = source_label,
+      source_conc_internal = current_conc,
+      result_conc_internal = step_target_conc,
+      stock_volume_L = stock_vol_L,
+      diluent_volume_L = diluent_vol_L,
+      total_volume_L = step_final_vol_L,
+      dilution_factor = df_per_step
+    )
+
+    current_conc <- step_target_conc
+  }
+
+  # Build instruction text
+  instruction_lines <- character(0)
+  label <- if (nzchar(solution_name)) solution_name else "solution"
+  target_conc_fmt <- format_conc_in_unit(target_norm$value, target_unit)
+
+  instruction_lines <- c(instruction_lines,
+    paste0(target_conc_fmt, " ", label, " in ", diluent),
+    paste0("Total DF: ", format_df(total_df), " in ", n_steps, " step(s)"),
+    ""
+  )
+
+  for (s in steps) {
+    stock_vol_fmt <- format_volume(s$stock_volume_L)
+    diluent_vol_fmt <- format_volume(s$diluent_volume_L)
+    step_conc_fmt <- format_concentration(s$result_conc_internal, conc_type)
+
+    instruction_lines <- c(instruction_lines,
+      paste0("Step ", s$step),
+      paste0("  ", stock_vol_fmt, " ", s$source_label, " + ",
+             diluent_vol_fmt, " ", diluent,
+             " | DF: ", format_df(s$dilution_factor)),
+      paste0("  \u2192 ", step_conc_fmt),
+      ""
+    )
+  }
+
+  instruction_text <- paste(instruction_lines, collapse = "\n")
+
+  list(
+    scenario_type = "multistep_dilution",
+    solution_name = solution_name,
+    instruction_text = instruction_text,
+    input_parameters = list(
+      stock_concentration = stock_val,
+      stock_unit = stock_unit,
+      target_concentration = target_val,
+      target_unit = target_unit,
+      final_volume = final_vol,
+      final_volume_unit = final_vol_unit,
+      diluent = diluent,
+      max_df_per_step = max_df_per_step,
+      min_pipette_vol_ul = min_pipette_vol_ul,
+      preferred_intermediate_vol_ul = preferred_intermediate_vol_ul
+    ),
+    normalized_parameters = list(
+      stock_conc_internal = stock_norm$value,
+      target_conc_internal = target_norm$value,
+      final_vol_L = final_vol_L,
+      conc_type = conc_type,
+      internal_conc_unit = stock_norm$internal_unit
+    ),
+    steps = steps,
+    warnings = warnings,
+    technical_metadata = list(
+      total_dilution_factor = total_df,
+      n_steps = n_steps,
+      df_per_step = df_per_step,
+      timestamp = Sys.time()
+    )
+  )
+}
