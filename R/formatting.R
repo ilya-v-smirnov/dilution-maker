@@ -11,11 +11,28 @@ sig3 <- function(x) {
   trimws(format(s, scientific = FALSE))
 }
 
+#' Format a number to N significant figures (no trailing zeros)
+sig_n <- function(x, n = 3) {
+  if (is.na(x) || is.null(x) || !is.finite(x)) return("NA")
+  if (x == 0) return("0")
+  if (is.null(n) || is.na(n) || !is.numeric(n) || n < 1) n <- 3
+  n <- as.integer(n)
+  s <- signif(x, n)
+  trimws(format(s, scientific = FALSE))
+}
+
 #' Format volume with auto-chosen unit (from internal L)
 format_volume <- function(value_L) {
   unit <- best_volume_unit(value_L)
   display_val <- L_to_volume(value_L, unit)
   paste0(sig3(display_val), " ", unit)
+}
+
+#' Format volume with auto-chosen unit and configurable significant figures
+format_volume_sig <- function(value_L, sig_digits = 3) {
+  unit <- best_volume_unit(value_L)
+  display_val <- L_to_volume(value_L, unit)
+  paste0(sig_n(display_val, sig_digits), " ", unit)
 }
 
 #' Format mass concentration with auto-chosen unit (from internal g/L)

@@ -181,10 +181,17 @@ export_word_document <- function(memory, filepath) {
   doc <- officer::body_add_par(doc, paste("Generated:", format(Sys.time(), "%Y-%m-%d %H:%M")))
   doc <- officer::body_add_par(doc, "")
 
-  # Style for dilution/preparation lines (containing "| DF:" or "Weigh")
+  # Style for dilution/preparation lines (containing "| DF:")
   fp_dilution <- officer::fp_text(
     font.family = "Calibri Light",
     font.size = 14
+  )
+
+  # Style for the first line of each recipe (bold)
+  fp_first_line <- officer::fp_text(
+    font.family = "Calibri",
+    font.size = 11,
+    bold = TRUE
   )
 
   for (scenario in names(memory)) {
@@ -192,15 +199,24 @@ export_word_document <- function(memory, filepath) {
     if (length(recipes) == 0) next
 
     doc <- officer::body_add_par(doc, scenario_display_name(scenario), style = "heading 2")
+    # Empty line after the level-2 heading
+    doc <- officer::body_add_par(doc, "")
 
     for (r in recipes) {
       lines <- strsplit(r$instruction_text, "\n")[[1]]
+      first_done <- FALSE
 
       for (line in lines) {
         line <- trimws(line)
         if (!nzchar(line)) next
 
-        if (grepl("\\| DF:", line, fixed = FALSE)) {
+        if (!first_done) {
+          # First non-empty line of the recipe → bold
+          doc <- officer::body_add_fpar(doc,
+            officer::fpar(officer::ftext(line, fp_first_line))
+          )
+          first_done <- TRUE
+        } else if (grepl("\\| DF:", line, fixed = FALSE)) {
           # Dilution line → Calibri Light 14pt
           doc <- officer::body_add_fpar(doc,
             officer::fpar(officer::ftext(line, fp_dilution))

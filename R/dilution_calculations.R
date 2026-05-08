@@ -58,6 +58,13 @@ calculate_single_dilution <- function(stock_val, stock_unit,
       paste0("Approximation used (DF = ", format_df(df),
              " > 100x): stock volume is negligible relative to final volume."))
   }
+  # Negative diluent volume → impossible dilution (stock < target)
+  if (diluent_vol_L < 0) {
+    warnings <- c(warnings,
+      paste0("Negative diluent volume (", format_volume(diluent_vol_L),
+             "): stock concentration is lower than target. ",
+             "Dilution is impossible \u2014 a more concentrated stock is required."))
+  }
 
   # Build instruction text
   stock_vol_fmt <- format_volume(stock_vol_L)

@@ -56,12 +56,16 @@ convert_with_mw <- function(value, from_unit, to_unit, mw) {
 #' @param final_vol Final volume value
 #' @param final_vol_unit Final volume unit
 #' @param diluent Diluent name
+#' @param stock_precision Significant figures for stock volume display (default 3)
+#' @param diluent_precision Significant figures for diluent volume display (default 3)
 #' @return Structured result object
 calculate_mw_based_preparation <- function(substance, mw, mw_source,
                                            stock_val, stock_unit,
                                            target_val, target_unit,
                                            final_vol, final_vol_unit,
-                                           diluent = "PBS") {
+                                           diluent = "PBS",
+                                           stock_precision = 3,
+                                           diluent_precision = 3) {
 
   stock_type <- get_conc_type(stock_unit)
   target_type <- get_conc_type(target_unit)
@@ -94,8 +98,8 @@ calculate_mw_based_preparation <- function(substance, mw, mw_source,
 
   # Rebuild instruction text with structured format
   s <- result$steps[[1]]
-  stock_vol_fmt <- format_volume(s$stock_volume_L)
-  diluent_vol_fmt <- format_volume(s$diluent_volume_L)
+  stock_vol_fmt <- format_volume_sig(s$stock_volume_L, stock_precision)
+  diluent_vol_fmt <- format_volume_sig(s$diluent_volume_L, diluent_precision)
   target_conc_fmt <- format_conc_in_unit(result$normalized_parameters$target_conc_internal, target_unit)
   original_stock_str <- paste0(sig3(stock_val), " ", stock_unit)
 
@@ -125,8 +129,12 @@ calculate_mw_based_preparation <- function(substance, mw, mw_source,
   result$input_parameters$mw_source <- mw_source
   result$input_parameters$original_stock_val <- stock_val
   result$input_parameters$original_stock_unit <- stock_unit
+  result$input_parameters$stock_precision <- stock_precision
+  result$input_parameters$diluent_precision <- diluent_precision
   result$technical_metadata$mw <- mw
   result$technical_metadata$mw_source <- mw_source
+  result$technical_metadata$stock_precision <- stock_precision
+  result$technical_metadata$diluent_precision <- diluent_precision
 
   result
 }

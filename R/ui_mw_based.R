@@ -35,22 +35,33 @@ mw_based_ui <- function(id) {
           h4("Concentration & Volume"),
           fluidRow(
             column(9, numericInput(ns("stock_val"), "Stock concentration", value = 1, min = 0, step = 0.1)),
-            column(3, selectInput(ns("stock_unit"), " ", choices = ALL_CONC_UNITS, selected = "mg/ml"))
+            column(3, selectInput(ns("stock_unit"), "\u00a0", choices = ALL_CONC_UNITS, selected = "mg/ml"))
           ),
           fluidRow(
-            column(9, numericInput(ns("target_val"), "Target concentration", value = 10, min = 0, step = 0.1)),
-            column(3, selectInput(ns("target_unit"), " ", choices = ALL_CONC_UNITS, selected = "nM"))
+            column(9, numericInput(ns("target_val"), "Target concentration", value = 600, min = 0, step = 0.1)),
+            column(3, selectInput(ns("target_unit"), "\u00a0", choices = ALL_CONC_UNITS, selected = "nM"))
           ),
           fluidRow(
-            column(9, numericInput(ns("final_vol"), "Final volume", value = 10, min = 0, step = 0.1)),
-            column(3, selectInput(ns("final_vol_unit"), " ", choices = VOLUME_UNITS, selected = "ml"))
+            column(9, numericInput(ns("final_vol"), "Final volume", value = 100, min = 0, step = 0.1)),
+            column(3, selectInput(ns("final_vol_unit"), "\u00a0", choices = VOLUME_UNITS, selected = "\u00b5l"))
           ),
           textInput(ns("diluent"), "Diluent", value = "PBS")
+        ),
+        wellPanel(
+          h4("Volume Precision"),
+          tags$small(class = "text-muted",
+            "Significant figures used to round stock and diluent volumes."),
+          br(), br(),
+          fluidRow(
+            column(6, numericInput(ns("stock_precision"),  "Stock volume",   value = 3, min = 1, max = 10, step = 1)),
+            column(6, numericInput(ns("diluent_precision"), "Diluent volume", value = 3, min = 1, max = 10, step = 1))
+          )
         )
       ),
       column(8,
         wellPanel(
           h4("Result"),
+          uiOutput(ns("negative_diluent_ui")),
           uiOutput(ns("warnings_ui")),
           verbatimTextOutput(ns("instruction_text")),
           hr(),
@@ -123,6 +134,8 @@ mw_based_server <- function(id, memory, mw_db) {
       req(!is.na(info$mw), info$mw > 0)
       req(input$stock_val, input$target_val, input$final_vol)
       req(input$stock_val > 0, input$target_val > 0, input$final_vol > 0)
+      req(input$stock_precision, input$diluent_precision)
+      req(input$stock_precision >= 1, input$diluent_precision >= 1)
 
       calculate_mw_based_preparation(
         substance = info$substance,
@@ -134,7 +147,9 @@ mw_based_server <- function(id, memory, mw_db) {
         target_unit = input$target_unit,
         final_vol = input$final_vol,
         final_vol_unit = input$final_vol_unit,
-        diluent = input$diluent
+        diluent = input$diluent,
+        stock_precision = input$stock_precision,
+        diluent_precision = input$diluent_precision
       )
     })
 
@@ -143,9 +158,24 @@ mw_based_server <- function(id, memory, mw_db) {
       result()$instruction_text
     })
 
+    # Prominent visual alert if diluent volume is negative
+    output$negative_diluent_ui <- renderUI({
+      req(result())
+      s <- result()$steps[[1]]
+      if (is.null(s$diluent_volume_L) || s$diluent_volume_L >= 0) return(NULL)
+      tags$div(class = "alert alert-danger",
+        tags$strong("Impossible dilution: "),
+        "diluent volume is negative (",
+        format_volume(s$diluent_volume_L),
+        "). Stock concentration is lower than target \u2014 a more concentrated stock is required."
+      )
+    })
+
     output$warnings_ui <- renderUI({
       req(result())
       w <- result()$warnings
+      # Skip the negative-diluent warning here (already shown in red alert above)
+      w <- w[!grepl("^Negative diluent volume", w)]
       if (length(w) == 0) return(NULL)
       tags$div(class = "alert alert-warning",
         tags$strong("Warnings:"),
@@ -157,6 +187,8 @@ mw_based_server <- function(id, memory, mw_db) {
       req(result())
       res <- result()
       s <- res$steps[[1]]
+      sp <- res$technical_metadata$stock_precision
+      dp <- res$technical_metadata$diluent_precision
       data.frame(
         Parameter = c("Substance", "MW (Da)", "MW Source",
                        "Dilution Factor", "Stock Volume", "Diluent Volume"),
@@ -165,8 +197,8 @@ mw_based_server <- function(id, memory, mw_db) {
           format(res$technical_metadata$mw, big.mark = ","),
           res$technical_metadata$mw_source,
           format_df(s$dilution_factor),
-          format_volume(s$stock_volume_L),
-          format_volume(s$diluent_volume_L)
+          format_volume_sig(s$stock_volume_L, sp),
+          format_volume_sig(s$diluent_volume_L, dp)
         ),
         stringsAsFactors = FALSE
       )
