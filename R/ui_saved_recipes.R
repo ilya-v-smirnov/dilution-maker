@@ -190,7 +190,7 @@ export_word_document <- function(memory, filepath) {
   # Style for the first line of each recipe (bold)
   fp_first_line <- officer::fp_text(
     font.family = "Calibri",
-    font.size = 11,
+    font.size = 12,
     bold = TRUE
   )
 

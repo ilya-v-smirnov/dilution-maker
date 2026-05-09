@@ -1,36 +1,64 @@
 # ==============================================================================
 # ui_multistep_dilution.R
-# UI and server logic for Multi-Step Dilution Planner tab
+# UI and server logic for Multi-Step Dilution Planner tab.
+# Supports "Use available stock" (substance + variant from stocks DB).
 # ==============================================================================
 
 multistep_dilution_ui <- function(id) {
   ns <- NS(id)
+
+  use_stock_off <- paste0("!input['", ns("use_stock"), "']")
+  use_stock_on  <- paste0("input['", ns("use_stock"), "']")
 
   tagList(
     fluidRow(
       column(4,
         wellPanel(
           h4("Input Parameters"),
-          textInput(ns("solution_name"), "Solution name (optional)", placeholder = "e.g. Serial dilution of Ab"),
+
+          conditionalPanel(
+            condition = use_stock_off,
+            textInput(ns("solution_name"), "Solution name (optional)",
+                      placeholder = "e.g. Serial dilution of Ab")
+          ),
+          conditionalPanel(
+            condition = use_stock_on,
+            selectInput(ns("stock_substance"), "Substance (from stocks)",
+                        choices = character(0)),
+            selectInput(ns("stock_variant"), "Stock variant",
+                        choices = character(0))
+          ),
+
+          checkboxInput(ns("use_stock"), "Use available stock", value = FALSE),
           hr(),
+
           fluidRow(
-            column(9, numericInput(ns("stock_val"), "Stock concentration", value = 10, min = 0, step = 0.1)),
-            column(3, selectInput(ns("stock_unit"), " ", choices = ALL_CONC_UNITS, selected = "mg/ml"))
+            column(9, numericInput(ns("stock_val"), "Stock concentration",
+                                   value = 10, min = 0, step = 0.1)),
+            column(3, selectInput(ns("stock_unit"), "\u00a0",
+                                  choices = ALL_CONC_UNITS, selected = "mg/ml"))
           ),
           fluidRow(
-            column(9, numericInput(ns("target_val"), "Target concentration", value = 1, min = 0, step = 0.001)),
-            column(3, selectInput(ns("target_unit"), " ", choices = ALL_CONC_UNITS, selected = "ng/ml"))
+            column(9, numericInput(ns("target_val"), "Target concentration",
+                                   value = 1, min = 0, step = 0.001)),
+            column(3, selectInput(ns("target_unit"), "\u00a0",
+                                  choices = ALL_CONC_UNITS, selected = "ng/ml"))
           ),
           fluidRow(
-            column(9, numericInput(ns("final_vol"), "Final volume", value = 10, min = 0, step = 0.1)),
-            column(3, selectInput(ns("final_vol_unit"), " ", choices = VOLUME_UNITS, selected = "ml"))
+            column(9, numericInput(ns("final_vol"), "Final volume",
+                                   value = 10, min = 0, step = 0.1)),
+            column(3, selectInput(ns("final_vol_unit"), "\u00a0",
+                                  choices = VOLUME_UNITS, selected = "ml"))
           ),
           textInput(ns("diluent"), "Diluent", value = "PBS"),
           hr(),
           h5("Planner Settings"),
-          numericInput(ns("max_df"), "Max DF per step", value = 500, min = 2, max = 10000, step = 10),
-          numericInput(ns("min_pipette"), "Min pipetting volume (\u00b5l)", value = 0.5, min = 0.1, max = 10, step = 0.1),
-          numericInput(ns("intermediate_vol"), "Preferred intermediate volume (\u00b5l)", value = 500, min = 50, max = 50000, step = 50)
+          numericInput(ns("max_df"), "Max DF per step",
+                       value = 500, min = 2, max = 10000, step = 10),
+          numericInput(ns("min_pipette"), "Min pipetting volume (\u00b5l)",
+                       value = 0.5, min = 0.1, max = 10, step = 0.1),
+          numericInput(ns("intermediate_vol"), "Preferred intermediate volume (\u00b5l)",
+                       value = 500, min = 50, max = 50000, step = 50)
         )
       ),
       column(8,
@@ -40,8 +68,10 @@ multistep_dilution_ui <- function(id) {
           verbatimTextOutput(ns("instruction_text")),
           hr(),
           fluidRow(
-            column(4, actionButton(ns("save_btn"), "Save to Memory", class = "btn-success", width = "100%")),
-            column(4, actionButton(ns("clear_btn"), "Clear", class = "btn-default", width = "100%"))
+            column(4, actionButton(ns("save_btn"), "Save to Memory",
+                                   class = "btn-success", width = "100%")),
+            column(4, actionButton(ns("clear_btn"), "Clear",
+                                   class = "btn-default", width = "100%"))
           )
         ),
         wellPanel(
@@ -53,13 +83,75 @@ multistep_dilution_ui <- function(id) {
   )
 }
 
-multistep_dilution_server <- function(id, memory) {
+multistep_dilution_server <- function(id, memory, stocks_db) {
   moduleServer(id, function(input, output, session) {
+
+    # --- Populate substance dropdown ---
+    observe({
+      if (!isTRUE(input$use_stock)) return()
+      subs <- get_unique_stock_substances(stocks_db())
+      sel  <- if (length(subs) > 0) {
+        if (!is.null(input$stock_substance) && input$stock_substance %in% subs) {
+          input$stock_substance
+        } else {
+          subs[1]
+        }
+      } else character(0)
+      updateSelectInput(session, "stock_substance", choices = subs, selected = sel)
+    })
+
+    # --- Populate variant dropdown ---
+    observe({
+      if (!isTRUE(input$use_stock)) return()
+      req(input$stock_substance)
+      if (!nzchar(input$stock_substance)) return()
+      v <- get_stock_variants(stocks_db(), input$stock_substance)
+      sel <- if (length(v$labels) > 0) v$labels[1] else character(0)
+      updateSelectInput(session, "stock_variant",
+                        choices = v$labels, selected = sel)
+    })
+
+    selected_stock <- reactive({
+      if (!isTRUE(input$use_stock)) return(NULL)
+      if (is.null(input$stock_substance) || !nzchar(input$stock_substance)) return(NULL)
+      if (is.null(input$stock_variant) || !nzchar(input$stock_variant)) return(NULL)
+      get_stock_by_variant(stocks_db(), input$stock_substance, input$stock_variant)
+    })
+
+    observeEvent(list(input$use_stock, selected_stock()), {
+      if (isTRUE(input$use_stock)) {
+        s <- selected_stock()
+        if (!is.null(s)) {
+          updateNumericInput(session, "stock_val", value = s$conc)
+          updateSelectInput(session, "stock_unit", selected = s$units)
+        }
+        shinyjs::disable("stock_val")
+        shinyjs::disable("stock_unit")
+      } else {
+        shinyjs::enable("stock_val")
+        shinyjs::enable("stock_unit")
+      }
+    }, ignoreInit = FALSE)
+
+    effective_solution_name <- reactive({
+      if (isTRUE(input$use_stock)) {
+        s <- selected_stock()
+        base <- input$stock_substance %||% ""
+        if (is.null(s)) return(base)
+        augment_name_with_stock(base, s)
+      } else {
+        input$solution_name %||% ""
+      }
+    })
 
     result <- reactive({
       req(input$stock_val, input$target_val, input$final_vol)
       req(input$stock_val > 0, input$target_val > 0, input$final_vol > 0)
       req(input$max_df, input$min_pipette, input$intermediate_vol)
+
+      if (isTRUE(input$use_stock)) {
+        req(selected_stock())
+      }
 
       val <- validate_single_dilution(
         input$stock_val, input$stock_unit,
@@ -69,16 +161,16 @@ multistep_dilution_server <- function(id, memory) {
       req(val$ok)
 
       plan_multistep_dilution(
-        stock_val = input$stock_val,
-        stock_unit = input$stock_unit,
-        target_val = input$target_val,
-        target_unit = input$target_unit,
-        final_vol = input$final_vol,
+        stock_val      = input$stock_val,
+        stock_unit     = input$stock_unit,
+        target_val     = input$target_val,
+        target_unit    = input$target_unit,
+        final_vol      = input$final_vol,
         final_vol_unit = input$final_vol_unit,
-        diluent = input$diluent,
-        solution_name = input$solution_name,
-        max_df_per_step = input$max_df,
-        min_pipette_vol_ul = input$min_pipette,
+        diluent        = input$diluent,
+        solution_name  = effective_solution_name(),
+        max_df_per_step             = input$max_df,
+        min_pipette_vol_ul          = input$min_pipette,
         preferred_intermediate_vol_ul = input$intermediate_vol
       )
     })
