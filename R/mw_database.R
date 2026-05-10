@@ -289,5 +289,5 @@ augment_name_with_stock <- function(base_name, stock_row) {
   if (is.null(stock_row) || nrow(stock_row) == 0) return(base_name)
   suffix <- stock_variant_label(stock_row$date, stock_row$comments)
   if (!nzchar(suffix)) return(base_name)
-  paste0(base_name, " (", suffix, ")")
+  paste0(base_name, "\t\t\t(", suffix, ")")
 }
