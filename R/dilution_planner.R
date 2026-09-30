@@ -36,44 +36,78 @@ plan_multistep_dilution <- function(stock_val, stock_unit,
   total_df <- stock_norm$value / target_norm$value
   final_vol_L <- vol_norm$value
 
-  # Determine number of steps needed
+  # Determine number of steps needed (the small tolerance guards against
+  # floating-point error when total_df is an exact power of max_df_per_step)
   if (total_df <= max_df_per_step) {
     n_steps <- 1
   } else {
-    n_steps <- ceiling(log(total_df) / log(max_df_per_step))
+    n_steps <- ceiling(log(total_df) / log(max_df_per_step) - 1e-9)
   }
 
-  # Calculate DF per step (equal geometric distribution)
-  df_per_step <- total_df^(1 / n_steps)
+  intermediate_vol_L <- volume_to_L(preferred_intermediate_vol_ul, "\u00b5l")
+  min_pipette_vol_L <- volume_to_L(min_pipette_vol_ul, "\u00b5l")
+
+  # Volume prepared in each step. Working backwards from the final volume,
+  # an intermediate must hold at least what the next step takes from it;
+  # if the preferred volume is too small, it is enlarged (+10% reserve).
+  plan_step_volumes <- function(n, df_step) {
+    vols <- numeric(n)
+    vols[n] <- final_vol_L
+    for (i in rev(seq_len(n - 1))) {
+      needed_L <- vols[i + 1] / df_step
+      vols[i] <- if (needed_L > intermediate_vol_L) {
+        ceiling_signif(needed_L * 1.1, 2)
+      } else {
+        intermediate_vol_L
+      }
+    }
+    vols
+  }
+
+  # Add steps (smaller DF per step -> larger transfer volumes) while any
+  # transfer is below the minimum pipetting volume
+  max_steps <- 10
+  repeat {
+    df_per_step <- total_df^(1 / n_steps)
+    step_vols_L <- plan_step_volumes(n_steps, df_per_step)
+    transfer_ok <- all(step_vols_L / df_per_step >= min_pipette_vol_L)
+    if (transfer_ok || n_steps >= max_steps || final_vol_L < min_pipette_vol_L) break
+    n_steps <- n_steps + 1
+  }
 
   # Build steps
   steps <- list()
   warnings <- character(0)
   current_conc <- stock_norm$value
-  intermediate_vol_L <- volume_to_L(preferred_intermediate_vol_ul, "\u00b5l")
 
   for (i in seq_len(n_steps)) {
     is_last <- (i == n_steps)
     step_target_conc <- current_conc / df_per_step
+    step_final_vol_L <- step_vols_L[i]
 
-    # For last step use the actual final volume; intermediates use preferred vol
-    if (is_last) {
-      step_final_vol_L <- final_vol_L
-    } else {
-      step_final_vol_L <- intermediate_vol_L
+    if (!is_last && step_final_vol_L > intermediate_vol_L) {
+      warnings <- c(warnings,
+        paste0("Intermediate ", i, " volume increased to ", format_volume(step_final_vol_L),
+               " (preferred ", format_volume(intermediate_vol_L),
+               ") to supply step ", i + 1, "."))
     }
 
     # Calculate volumes (use approximation if DF > 100)
+    stock_vol_L <- step_final_vol_L / df_per_step
     if (df_per_step > 100) {
-      stock_vol_L <- step_final_vol_L / df_per_step
       diluent_vol_L <- step_final_vol_L
     } else {
-      stock_vol_L <- step_final_vol_L / df_per_step
       diluent_vol_L <- step_final_vol_L - stock_vol_L
     }
 
     # Pipetting warnings
     step_warnings <- pipetting_warnings(stock_vol_L)
+    if (stock_vol_L < min_pipette_vol_L) {
+      step_warnings <- c(step_warnings,
+        paste0("Transfer volume ", format_volume(stock_vol_L),
+               " is below the minimum pipetting volume (",
+               sig3(min_pipette_vol_ul), " \u00b5l)."))
+    }
     if (length(step_warnings) > 0) {
       step_warnings <- paste0("Step ", i, ": ", step_warnings)
       warnings <- c(warnings, step_warnings)
@@ -160,4 +194,10 @@ plan_multistep_dilution <- function(stock_val, stock_unit,
       timestamp = Sys.time()
     )
   )
+}
+
+#' Round a positive number up to `digits` significant figures
+ceiling_signif <- function(x, digits = 2) {
+  magnitude <- 10^(floor(log10(x)) - digits + 1)
+  ceiling(x / magnitude) * magnitude
 }

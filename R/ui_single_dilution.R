@@ -13,7 +13,7 @@ single_dilution_ui <- function(id) {
 
   tagList(
     fluidRow(
-      column(4,
+      column(4, id = ns("inputs_panel"),
         wellPanel(
           h4("Input Parameters"),
 
@@ -59,6 +59,7 @@ single_dilution_ui <- function(id) {
       column(8,
         wellPanel(
           h4("Result"),
+          uiOutput(ns("errors_ui")),
           uiOutput(ns("warnings_ui")),
           verbatimTextOutput(ns("instruction_text")),
           hr(),
@@ -143,22 +144,24 @@ single_dilution_server <- function(id, memory, stocks_db) {
       }
     })
 
+    # --- Input validation (errors are shown to the user) ---
+    validation <- reactive({
+      validate_single_dilution(
+        input$stock_val, input$stock_unit,
+        input$target_val, input$target_unit,
+        input$final_vol, input$final_vol_unit
+      )
+    })
+
     # --- Reactive calculation ---
     result <- reactive({
-      req(input$stock_val, input$target_val, input$final_vol)
-      req(input$stock_val > 0, input$target_val > 0, input$final_vol > 0)
+      val <- validation()
+      req(val$ok)
 
       # When using a stock, we need at least one valid variant selected
       if (isTRUE(input$use_stock)) {
         req(selected_stock())
       }
-
-      val <- validate_single_dilution(
-        input$stock_val, input$stock_unit,
-        input$target_val, input$target_unit,
-        input$final_vol, input$final_vol_unit
-      )
-      req(val$ok)
 
       calculate_single_dilution(
         stock_val      = input$stock_val,
@@ -176,6 +179,16 @@ single_dilution_server <- function(id, memory, stocks_db) {
     output$instruction_text <- renderText({
       req(result())
       result()$instruction_text
+    })
+
+    # Show why nothing is calculated (e.g. stock below target, incompatible units)
+    output$errors_ui <- renderUI({
+      val <- validation()
+      if (isTRUE(val$ok)) return(NULL)
+      tags$div(class = "alert alert-danger",
+        tags$strong("Cannot calculate:"),
+        tags$ul(lapply(val$errors, tags$li))
+      )
     })
 
     output$warnings_ui <- renderUI({
@@ -212,8 +225,9 @@ single_dilution_server <- function(id, memory, stocks_db) {
       showNotification("Saved to memory!", type = "message", duration = 2)
     })
 
+    # Restore all inputs to their defaults
     observeEvent(input$clear_btn, {
-      # Reactive calc - nothing to clear; kept for UX consistency
+      shinyjs::reset("inputs_panel")
     })
   })
 }

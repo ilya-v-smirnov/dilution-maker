@@ -31,7 +31,7 @@ dry_substance_ui <- function(id) {
           ),
           uiOutput(ns("mw_display"))
         ),
-        wellPanel(
+        wellPanel(id = ns("target_panel"),
           h4("Target Solution"),
           fluidRow(
             column(9, numericInput(ns("target_val"), "Target concentration", value = 100, min = 0, step = 0.1)),
@@ -73,7 +73,10 @@ dry_substance_server <- function(id, memory, mw_db) {
       sheet_names <- db$sheet_names
       choices <- setNames(sheet_names, sheet_names)
       choices <- c(choices, "Manual entry" = "manual")
-      updateRadioButtons(session, "mw_source", choices = choices, selected = sheet_names[1], inline = TRUE)
+      # Keep the user's current source when the DB is edited in another tab
+      current <- isolate(input$mw_source)
+      selected <- if (!is.null(current) && current %in% choices) current else sheet_names[1]
+      updateRadioButtons(session, "mw_source", choices = choices, selected = selected, inline = TRUE)
     })
 
     # Update substance dropdown based on selected sheet
@@ -82,7 +85,15 @@ dry_substance_server <- function(id, memory, mw_db) {
       src <- input$mw_source
       if (is.null(src) || src == "manual") return()
       choices <- get_substance_names_from_sheet(db, src)
-      selected <- if (length(choices) > 0) choices[1] else NULL
+      # Keep the current substance if it is still listed (e.g. after a DB edit)
+      current <- isolate(input$substance_db)
+      selected <- if (!is.null(current) && current %in% choices) {
+        current
+      } else if (length(choices) > 0) {
+        choices[1]
+      } else {
+        NULL
+      }
       updateSelectizeInput(session, "substance_db", choices = choices, selected = selected)
     })
 
@@ -91,7 +102,7 @@ dry_substance_server <- function(id, memory, mw_db) {
       if (is.null(src)) return(list(substance = "", mw = NA, source = ""))
 
       if (src == "manual") {
-        list(substance = input$substance_manual, mw = input$mw_manual, source = "manual")
+        list(substance = input$substance_manual %||% "", mw = input$mw_manual, source = "manual")
       } else {
         req(input$substance_db)
         req(nzchar(input$substance_db))
@@ -103,7 +114,7 @@ dry_substance_server <- function(id, memory, mw_db) {
 
     output$mw_display <- renderUI({
       info <- current_mw()
-      if (is.na(info$mw) || is.null(info$mw)) {
+      if (is.null(info$mw) || is.na(info$mw)) {
         tags$div(class = "alert alert-info", "Select a substance or enter MW manually.")
       } else {
         tags$div(class = "alert alert-success",
@@ -169,8 +180,12 @@ dry_substance_server <- function(id, memory, mw_db) {
       showNotification("Saved to memory!", type = "message", duration = 2)
     })
 
+    # Restore target/volume/solvent and manual inputs to their defaults;
+    # the selected MW source and substance are kept
     observeEvent(input$clear_btn, {
-      # placeholder
+      for (id in c("target_panel", "substance_manual", "mw_manual")) {
+        shinyjs::reset(id)
+      }
     })
   })
 }

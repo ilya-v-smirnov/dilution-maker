@@ -50,7 +50,7 @@ calculate_single_dilution <- function(stock_val, stock_unit,
   # Warnings
   warnings <- character(0)
   warnings <- c(warnings, pipetting_warnings(stock_vol_L))
-  if (df > 1000 && !approximation_used) {
+  if (df > 1000) {
     warnings <- c(warnings, "Very large dilution factor. Consider using the Multi-Step Planner.")
   }
   if (approximation_used) {

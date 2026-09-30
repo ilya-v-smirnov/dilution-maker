@@ -12,7 +12,7 @@ multistep_dilution_ui <- function(id) {
 
   tagList(
     fluidRow(
-      column(4,
+      column(4, id = ns("inputs_panel"),
         wellPanel(
           h4("Input Parameters"),
 
@@ -64,6 +64,7 @@ multistep_dilution_ui <- function(id) {
       column(8,
         wellPanel(
           h4("Dilution Plan"),
+          uiOutput(ns("errors_ui")),
           uiOutput(ns("warnings_ui")),
           verbatimTextOutput(ns("instruction_text")),
           hr(),
@@ -144,21 +145,33 @@ multistep_dilution_server <- function(id, memory, stocks_db) {
       }
     })
 
-    result <- reactive({
-      req(input$stock_val, input$target_val, input$final_vol)
-      req(input$stock_val > 0, input$target_val > 0, input$final_vol > 0)
-      req(input$max_df, input$min_pipette, input$intermediate_vol)
-
-      if (isTRUE(input$use_stock)) {
-        req(selected_stock())
-      }
-
+    # --- Input validation (errors are shown to the user) ---
+    validation <- reactive({
       val <- validate_single_dilution(
         input$stock_val, input$stock_unit,
         input$target_val, input$target_unit,
         input$final_vol, input$final_vol_unit
       )
+      errors <- val$errors
+      if (is.null(input$max_df) || is.na(input$max_df) || input$max_df <= 1) {
+        errors <- c(errors, "Max DF per step must be greater than 1.")
+      }
+      for (check in list(
+        validate_positive(input$min_pipette, "Min pipetting volume"),
+        validate_positive(input$intermediate_vol, "Preferred intermediate volume")
+      )) {
+        if (!check$ok) errors <- c(errors, check$msg)
+      }
+      list(ok = length(errors) == 0, errors = errors, warnings = val$warnings)
+    })
+
+    result <- reactive({
+      val <- validation()
       req(val$ok)
+
+      if (isTRUE(input$use_stock)) {
+        req(selected_stock())
+      }
 
       plan_multistep_dilution(
         stock_val      = input$stock_val,
@@ -178,6 +191,16 @@ multistep_dilution_server <- function(id, memory, stocks_db) {
     output$instruction_text <- renderText({
       req(result())
       result()$instruction_text
+    })
+
+    # Show why nothing is calculated (e.g. stock below target, incompatible units)
+    output$errors_ui <- renderUI({
+      val <- validation()
+      if (isTRUE(val$ok)) return(NULL)
+      tags$div(class = "alert alert-danger",
+        tags$strong("Cannot calculate:"),
+        tags$ul(lapply(val$errors, tags$li))
+      )
     })
 
     output$warnings_ui <- renderUI({
@@ -215,8 +238,9 @@ multistep_dilution_server <- function(id, memory, stocks_db) {
       showNotification("Saved to memory!", type = "message", duration = 2)
     })
 
+    # Restore all inputs to their defaults
     observeEvent(input$clear_btn, {
-      # placeholder
+      shinyjs::reset("inputs_panel")
     })
   })
 }

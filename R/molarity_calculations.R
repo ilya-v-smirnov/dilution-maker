@@ -102,11 +102,12 @@ calculate_mw_based_preparation <- function(substance, mw, mw_source,
   diluent_vol_fmt <- format_volume_sig(s$diluent_volume_L, diluent_precision)
   target_conc_fmt <- format_conc_in_unit(result$normalized_parameters$target_conc_internal, target_unit)
   original_stock_str <- paste0(sig3(stock_val), " ", stock_unit)
+  label <- if (nzchar(substance)) substance else "substance"
 
   if (stock_type != target_type) {
     converted_stock_str <- paste0(sig3(effective_stock_val), " ", effective_stock_unit)
     result$instruction_text <- paste0(
-      substance, "\n",
+      label, "\n",
       "Stock: ", original_stock_str, " = ", converted_stock_str,
       " (MW: ", sig3(mw), " Da)",
       " \u2192 ", target_conc_fmt, " in ", diluent, "\n",
@@ -115,7 +116,7 @@ calculate_mw_based_preparation <- function(substance, mw, mw_source,
     )
   } else {
     result$instruction_text <- paste0(
-      substance, "\n",
+      label, "\n",
       "Stock: ", original_stock_str,
       " \u2192 ", target_conc_fmt, " in ", diluent, "\n",
       stock_vol_fmt, " stock + ", diluent_vol_fmt, " ", diluent,
@@ -176,10 +177,11 @@ calculate_dry_substance <- function(substance, mw,
   mass_fmt <- format_mass(mass_g)
   vol_fmt <- format_volume(vol_L)
   target_fmt <- paste0(sig3(target_val), " ", target_unit)
+  label <- if (nzchar(substance)) substance else "substance"
 
   instruction <- paste0(
-    target_fmt, " ", substance, " in ", solvent, "\n",
-    "Weigh ", mass_fmt, " ", substance, "\n",
+    target_fmt, " ", label, " in ", solvent, "\n",
+    "Weigh ", mass_fmt, " ", label, "\n",
     "Dissolve in ", vol_fmt, " ", solvent
   )
 

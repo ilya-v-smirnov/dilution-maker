@@ -5,7 +5,7 @@
 
 #' Format a number to 3 significant figures (no trailing zeros)
 sig3 <- function(x) {
-  if (is.na(x) || is.null(x) || !is.finite(x)) return("NA")
+  if (is.null(x) || length(x) == 0 || is.na(x) || !is.finite(x)) return("NA")
   if (x == 0) return("0")
   s <- signif(x, 3)
   trimws(format(s, scientific = FALSE))
@@ -13,7 +13,7 @@ sig3 <- function(x) {
 
 #' Format a number to N significant figures (no trailing zeros)
 sig_n <- function(x, n = 3) {
-  if (is.na(x) || is.null(x) || !is.finite(x)) return("NA")
+  if (is.null(x) || length(x) == 0 || is.na(x) || !is.finite(x)) return("NA")
   if (x == 0) return("0")
   if (is.null(n) || is.na(n) || !is.numeric(n) || n < 1) n <- 3
   n <- as.integer(n)

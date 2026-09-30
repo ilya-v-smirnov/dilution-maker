@@ -48,7 +48,7 @@ mw_based_ui <- function(id) {
             uiOutput(ns("stock_match_msg"))
           )
         ),
-        wellPanel(
+          wellPanel(id = ns("conc_panel"),
           h4("Concentration & Volume"),
           fluidRow(
             column(9, numericInput(ns("stock_val"), "Stock concentration",
@@ -70,7 +70,7 @@ mw_based_ui <- function(id) {
           ),
           textInput(ns("diluent"), "Diluent", value = "PBS")
         ),
-        wellPanel(
+        wellPanel(id = ns("precision_panel"),
             h4("Volume Precision"),
             tags$small(class = "text-muted",
                        "Significant figures used to round stock and diluent volumes."),
@@ -113,8 +113,11 @@ mw_based_server <- function(id, memory, mw_db, stocks_db) {
       sheet_names <- db$sheet_names
       choices <- setNames(sheet_names, sheet_names)
       choices <- c(choices, "Manual entry" = "manual")
+      # Keep the user's current source when the DB is edited in another tab
+      current <- isolate(input$mw_source)
+      selected <- if (!is.null(current) && current %in% choices) current else sheet_names[1]
       updateRadioButtons(session, "mw_source",
-                         choices = choices, selected = sheet_names[1], inline = TRUE)
+                         choices = choices, selected = selected, inline = TRUE)
     })
 
     # Update substance dropdown when DB or selected sheet changes
@@ -123,7 +126,15 @@ mw_based_server <- function(id, memory, mw_db, stocks_db) {
       src <- input$mw_source
       if (is.null(src) || src == "manual") return()
       choices <- get_substance_names_from_sheet(db, src)
-      selected <- if (length(choices) > 0) choices[1] else NULL
+      # Keep the current substance if it is still listed (e.g. after a DB edit)
+      current <- isolate(input$substance_db)
+      selected <- if (!is.null(current) && current %in% choices) {
+        current
+      } else if (length(choices) > 0) {
+        choices[1]
+      } else {
+        NULL
+      }
       updateSelectizeInput(session, "substance_db", choices = choices, selected = selected)
     })
 
@@ -147,7 +158,7 @@ mw_based_server <- function(id, memory, mw_db, stocks_db) {
 
     output$mw_display <- renderUI({
       info <- current_mw()
-      if (is.na(info$mw) || is.null(info$mw)) {
+      if (is.null(info$mw) || is.na(info$mw)) {
         tags$div(class = "alert alert-info", "Select a substance or enter MW manually.")
       } else {
         tags$div(class = "alert alert-success",
@@ -305,12 +316,22 @@ mw_based_server <- function(id, memory, mw_db, stocks_db) {
 
     observeEvent(input$save_btn, {
       req(result())
+      if (isTRUE(result()$steps[[1]]$diluent_volume_L < 0)) {
+        showNotification("Impossible dilution \u2014 recipe not saved.",
+                         type = "error", duration = 4)
+        return()
+      }
       memory(save_to_memory(memory(), result()))
       showNotification("Saved to memory!", type = "message", duration = 2)
     })
 
+    # Restore concentrations, volumes, precision and stock/manual inputs to
+    # their defaults; the selected MW source and substance are kept
     observeEvent(input$clear_btn, {
-      # placeholder
+      for (id in c("conc_panel", "precision_panel", "use_stock",
+                   "substance_manual", "mw_manual")) {
+        shinyjs::reset(id)
+      }
     })
   })
 }

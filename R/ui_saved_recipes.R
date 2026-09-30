@@ -66,8 +66,7 @@ saved_recipes_server <- function(id, memory) {
           return(tags$p(class = "text-muted", "No saved recipes."))
         }
 
-        recipe_blocks <- lapply(seq_along(recipes), function(i) {
-          r <- recipes[[i]]
+        recipe_blocks <- lapply(recipes, function(r) {
           wellPanel(
             fluidRow(
               column(10,
@@ -76,11 +75,17 @@ saved_recipes_server <- function(id, memory) {
                 )
               ),
               column(2,
-                actionButton(
-                  ns(paste0("del_", scenario, "_", i)),
-                  "Remove",
-                  class = "btn-sm btn-danger",
-                  width = "100%"
+                # Every button reports the recipe's unique memory_id to one
+                # shared input, so a click always removes exactly that recipe
+                tags$button(
+                  type = "button",
+                  class = "btn btn-sm btn-danger",
+                  style = "width: 100%;",
+                  onclick = sprintf(
+                    "Shiny.setInputValue('%s', '%s', {priority: 'event'});",
+                    ns("delete_recipe"), r$memory_id
+                  ),
+                  "Remove"
                 )
               )
             ),
@@ -101,22 +106,11 @@ saved_recipes_server <- function(id, memory) {
     output$mw_based_recipes <- render_recipe_list("mw_based_preparation")
     output$dry_substance_recipes <- render_recipe_list("dry_substance")
 
-    # Delete observers (dynamic)
-    observe({
-      mem <- memory()
-      for (scenario in names(mem)) {
-        for (i in seq_along(mem[[scenario]])) {
-          local({
-            local_scenario <- scenario
-            local_i <- i
-            btn_id <- paste0("del_", local_scenario, "_", local_i)
-            observeEvent(input[[btn_id]], {
-              memory(remove_from_memory(memory(), local_scenario, local_i))
-              showNotification("Recipe removed.", type = "message", duration = 2)
-            }, ignoreInit = TRUE, once = TRUE)
-          })
-        }
-      }
+    # Single delete handler: identifies the recipe by memory_id, not by
+    # position, so it is unaffected by re-rendering and index shifts
+    observeEvent(input$delete_recipe, {
+      memory(remove_from_memory_by_id(memory(), input$delete_recipe))
+      showNotification("Recipe removed.", type = "message", duration = 2)
     })
 
     # Clear all
@@ -172,8 +166,8 @@ saved_recipes_server <- function(id, memory) {
 
 export_word_document <- function(memory, filepath) {
   if (!requireNamespace("officer", quietly = TRUE)) {
-    showNotification("Package 'officer' required for Word export.", type = "error")
-    return()
+    # Fail the download explicitly instead of delivering an empty file
+    stop("Package 'officer' is required for Word export.")
   }
 
   doc <- officer::read_docx()
@@ -242,8 +236,7 @@ export_word_document <- function(memory, filepath) {
 
 export_scenario_excel <- function(memory, scenario, filepath) {
   if (!requireNamespace("openxlsx", quietly = TRUE)) {
-    showNotification("Package 'openxlsx' required for Excel export.", type = "error")
-    return()
+    stop("Package 'openxlsx' is required for Excel export.")
   }
 
   recipes <- memory[[scenario]]
@@ -283,6 +276,9 @@ export_scenario_excel <- function(memory, scenario, filepath) {
       base$MW_Source <- ip$mw_source
       base$Stock <- paste(ip$original_stock_val, ip$original_stock_unit)
       base$Target <- paste(ip$target_concentration, ip$target_unit)
+      base$Volume <- paste(ip$final_volume, ip$final_volume_unit)
+      base$Diluent <- ip$diluent
+      base$DF <- r$technical_metadata$dilution_factor
     } else if (scenario == "dry_substance") {
       base$Substance <- ip$substance
       base$MW <- ip$mw
