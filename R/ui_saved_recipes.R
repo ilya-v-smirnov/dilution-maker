@@ -3,10 +3,41 @@
 # UI and server logic for Saved Recipes tab + Export
 # ==============================================================================
 
+# Recipe types in display order: memory slot -> heading
+RECIPE_SCENARIOS <- c(
+  "Single Dilution"           = "single_dilution",
+  "Multi-Step Dilution"       = "multistep_dilution",
+  "MW-Based Preparation"      = "mw_based_preparation",
+  "Dry Substance Preparation" = "dry_substance"
+)
+
+SORT_LEVEL_LABELS <- c("Sort by", "then by", "then by")
+
+# Short recipe-type labels for the sorting summary
+RECIPE_SHORT_LABELS <- c(
+  single_dilution      = "Single",
+  multistep_dilution   = "Multi-Step",
+  mw_based_preparation = "MW-Based",
+  dry_substance        = "Dry Substance"
+)
+
 saved_recipes_ui <- function(id) {
   ns <- NS(id)
 
+  sort_level_row <- function(i) {
+    fluidRow(
+      column(8, selectInput(ns(paste0("sort_by_", i)), SORT_LEVEL_LABELS[i],
+                            choices = c("(none)" = "none", SORT_KEYS),
+                            selected = "none")),
+      column(4, class = "sort-dir ps-0", radioButtons(ns(paste0("sort_dir_", i)), "\u00a0",
+                             choices = c("\u2191" = "asc", "\u2193" = "desc"),
+                             selected = "asc", inline = TRUE))
+    )
+  }
+
   tagList(
+    # wider gap between the inline sort-direction options
+    tags$style(HTML(".sort-dir .radio-inline + .radio-inline { margin-left: 0.75rem; }")),
     fluidRow(
       column(12,
         wellPanel(
@@ -14,19 +45,33 @@ saved_recipes_ui <- function(id) {
             column(4, h4(textOutput(ns("total_count")))),
             column(4, downloadButton(ns("export_word"), "Export All (Word)", class = "btn-info")),
             column(4, actionButton(ns("clear_all"), "Clear All Memory", class = "btn-danger"))
-          ),
-          # Display/export options (second row, under the buttons)
-          fluidRow(class = "mt-2",
-            column(8, offset = 4,
-              checkboxInput(ns("show_pipettes"), "Show pipette in instruction",
-                            value = FALSE)
-            )
           )
         )
       )
     ),
-    fluidRow(
-      column(12,
+    fluidRow(class = "mt-3",
+      # ----- Left panel: automatic sorting -----------------------------------
+      column(3,
+        wellPanel(
+          h4("Sorting"),
+          selectInput(ns("sort_type"), "Recipe type", choices = RECIPE_SCENARIOS),
+          lapply(seq_along(SORT_LEVEL_LABELS), sort_level_row),
+          actionButton(ns("sort_btn"), "Sort", class = "btn-primary", width = "100%"),
+          uiOutput(ns("sort_summary")),
+          tags$small(class = "text-muted d-block mt-2",
+            "Criteria are set per recipe type; Sort applies all of them. ",
+            "Molar concentrations go before mass ones; unnamed recipes go last.")
+        ),
+        # Display / Word export options
+        wellPanel(
+          h4("Display"),
+          checkboxInput(ns("show_pipettes"), "Show pipette in instruction",
+                        value = FALSE),
+          checkboxInput(ns("keep_warnings"), "Keep warnings", value = TRUE)
+        )
+      ),
+      # ----- Right panel: recipe lists ---------------------------------------
+      column(9,
         h4("Single Dilution"),
         uiOutput(ns("single_dilution_recipes")),
         hr(),
@@ -64,40 +109,54 @@ saved_recipes_server <- function(id, memory) {
       paste0("Saved Recipes: ", count_saved(memory()))
     })
 
+    # Button that reports `value` to one shared module input; buttons are
+    # identified by the recipe's unique memory_id, not by position
+    recipe_button <- function(input_id, value, label, class, disabled = FALSE) {
+      tags$button(
+        type = "button",
+        class = paste("btn btn-sm", class),
+        style = "width: 100%;",
+        disabled = if (disabled) NA else NULL,
+        onclick = sprintf("Shiny.setInputValue('%s', '%s', {priority: 'event'});",
+                          ns(input_id), value),
+        label
+      )
+    }
+
     # Render recipe blocks for each scenario
     render_recipe_list <- function(scenario) {
       renderUI({
         mem <- memory()
         recipes <- mem[[scenario]]
         show_pip <- isTRUE(input$show_pipettes)
+        keep_warn <- isTRUE(input$keep_warnings)
         if (length(recipes) == 0) {
           return(tags$p(class = "text-muted", "No saved recipes."))
         }
+        n <- length(recipes)
 
-        recipe_blocks <- lapply(recipes, function(r) {
+        recipe_blocks <- lapply(seq_len(n), function(i) {
+          r <- recipes[[i]]
           wellPanel(
             fluidRow(
-              column(10,
+              column(9,
                 tags$pre(style = "white-space: pre-wrap; background: #f8f9fa; padding: 10px;",
                   recipe_text(r, show_pip)
                 )
               ),
-              column(2,
-                # Every button reports the recipe's unique memory_id to one
-                # shared input, so a click always removes exactly that recipe
-                tags$button(
-                  type = "button",
-                  class = "btn btn-sm btn-danger",
-                  style = "width: 100%;",
-                  onclick = sprintf(
-                    "Shiny.setInputValue('%s', '%s', {priority: 'event'});",
-                    ns("delete_recipe"), r$memory_id
-                  ),
-                  "Remove"
+              column(3,
+                recipe_button("delete_recipe", r$memory_id, "Remove", "btn-danger"),
+                fluidRow(class = "g-1 mt-1",
+                  column(6, recipe_button("move_recipe", paste0(r$memory_id, "|up"),
+                                          "\u2191 Up", "btn-outline-secondary",
+                                          disabled = i == 1)),
+                  column(6, recipe_button("move_recipe", paste0(r$memory_id, "|down"),
+                                          "\u2193 Down", "btn-outline-secondary",
+                                          disabled = i == n))
                 )
               )
             ),
-            if (length(r$warnings) > 0) {
+            if (keep_warn && length(r$warnings) > 0) {
               tags$small(class = "text-warning",
                 paste("Warnings:", paste(r$warnings, collapse = "; "))
               )
@@ -119,6 +178,95 @@ saved_recipes_server <- function(id, memory) {
     observeEvent(input$delete_recipe, {
       memory(remove_from_memory_by_id(memory(), input$delete_recipe))
       showNotification("Recipe removed.", type = "message", duration = 2)
+    })
+
+    # Up / Down: value is "<memory_id>|up" or "<memory_id>|down"
+    observeEvent(input$move_recipe, {
+      parts <- strsplit(input$move_recipe, "|", fixed = TRUE)[[1]]
+      delta <- if (identical(parts[2], "up")) -1 else 1
+      memory(move_recipe(memory(), parts[1], delta))
+    })
+
+    # ---- Sorting: settings kept per recipe type (session only) -------------
+    n_levels <- length(SORT_LEVEL_LABELS)
+    blank_levels <- function() lapply(seq_len(n_levels), function(i) list(key = "none", desc = FALSE))
+    stored_settings <- reactiveVal(
+      setNames(lapply(RECIPE_SCENARIOS, function(x) blank_levels()), RECIPE_SCENARIOS))
+    shown_type <- RECIPE_SCENARIOS[[1]]   # type whose settings the widgets show
+
+    read_widgets <- function() {
+      lapply(seq_len(n_levels), function(i) list(
+        key  = input[[paste0("sort_by_", i)]] %||% "none",
+        desc = identical(input[[paste0("sort_dir_", i)]], "desc")
+      ))
+    }
+    store_widgets <- function(type) {
+      st <- isolate(stored_settings())
+      st[[type]] <- isolate(read_widgets())
+      stored_settings(st)
+    }
+
+    # On type change: store the widgets into the previously shown type,
+    # then show the newly selected type's settings
+    observeEvent(input$sort_type, {
+      store_widgets(shown_type)
+      shown_type <<- input$sort_type
+      lv <- stored_settings()[[shown_type]]
+      for (i in seq_len(n_levels)) {
+        updateSelectInput(session, paste0("sort_by_", i), selected = lv[[i]]$key)
+        updateRadioButtons(session, paste0("sort_dir_", i),
+                           selected = if (lv[[i]]$desc) "desc" else "asc")
+      }
+    }, ignoreInit = TRUE)
+
+    # Current settings of all types (widgets for the type on screen)
+    current_settings <- reactive({
+      st <- stored_settings()
+      type <- input$sort_type %||% shown_type
+      st[[type]] <- read_widgets()
+      st
+    })
+
+    describe_levels <- function(levels) {
+      parts <- vapply(levels, function(l) {
+        if (!l$key %in% SORT_KEYS) return(NA_character_)
+        paste0(names(SORT_KEYS)[SORT_KEYS == l$key], if (l$desc) " \u2193" else " \u2191")
+      }, character(1))
+      parts <- unique(parts[!is.na(parts)])
+      if (length(parts) == 0) NA_character_ else paste(parts, collapse = ", ")
+    }
+
+    # Summary of what Sort will do, per recipe type
+    output$sort_summary <- renderUI({
+      st <- current_settings()
+      items <- lapply(names(RECIPE_SCENARIOS), function(lbl) {
+        d <- describe_levels(st[[RECIPE_SCENARIOS[[lbl]]]])
+        tags$li(tags$strong(paste0(RECIPE_SHORT_LABELS[[RECIPE_SCENARIOS[[lbl]]]], ": ")),
+                if (is.na(d)) tags$span(class = "text-muted", "\u2014") else d)
+      })
+      tags$ul(class = "small ps-3 mt-2 mb-0", items)
+    })
+
+    observeEvent(input$sort_btn, {
+      store_widgets(shown_type)
+      st <- stored_settings()
+      mem <- memory()
+      sorted <- character(0)
+      for (lbl in names(RECIPE_SCENARIOS)) {
+        sc <- RECIPE_SCENARIOS[[lbl]]
+        if (is.na(describe_levels(st[[sc]])) || length(mem[[sc]]) < 2) next
+        mem <- sort_scenario_recipes(mem, sc, st[[sc]])
+        sorted <- c(sorted, lbl)
+      }
+      memory(mem)
+      if (length(sorted) > 0) {
+        showNotification(paste("Sorted:", paste(sorted, collapse = ", ")),
+                         type = "message", duration = 3)
+      } else {
+        showNotification(paste("Nothing to sort: set criteria for a recipe type",
+                               "that has at least two saved recipes."),
+                         type = "warning", duration = 5)
+      }
     })
 
     # Clear all
@@ -146,7 +294,8 @@ saved_recipes_server <- function(id, memory) {
       },
       content = function(file) {
         export_word_document(memory(), file,
-                             show_pipettes = isTRUE(input$show_pipettes))
+                             show_pipettes = isTRUE(input$show_pipettes),
+                             keep_warnings = isTRUE(input$keep_warnings))
       }
     )
 
@@ -174,7 +323,8 @@ saved_recipes_server <- function(id, memory) {
 # Export functions (Word and Excel)
 # ==============================================================================
 
-export_word_document <- function(memory, filepath, show_pipettes = TRUE) {
+export_word_document <- function(memory, filepath, show_pipettes = TRUE,
+                                 keep_warnings = TRUE) {
   if (!requireNamespace("officer", quietly = TRUE)) {
     # Fail the download explicitly instead of delivering an empty file
     stop("Package 'officer' is required for Word export.")
@@ -230,7 +380,7 @@ export_word_document <- function(memory, filepath, show_pipettes = TRUE) {
         }
       }
 
-      if (length(r$warnings) > 0) {
+      if (keep_warnings && length(r$warnings) > 0) {
         doc <- officer::body_add_par(doc,
           paste("Warnings:", paste(r$warnings, collapse = "; ")),
           style = "Normal"

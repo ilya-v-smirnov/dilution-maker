@@ -98,3 +98,78 @@ scenario_display_name <- function(scenario) {
     scenario
   )
 }
+
+# ==============================================================================
+# Ordering of saved recipes (manual Up/Down and automatic sorting)
+# ==============================================================================
+
+#' Sort criteria available in the Saved Recipes tab
+SORT_KEYS <- c("Substance name" = "name",
+               "Target conc."   = "target",
+               "Final volume"   = "volume")
+
+#' Move a recipe one position up (delta = -1) or down (delta = +1)
+#' within its scenario. Out-of-range moves leave memory unchanged.
+move_recipe <- function(memory, memory_id, delta) {
+  for (scenario in names(memory)) {
+    recs <- memory[[scenario]]
+    ids <- vapply(recs, function(r) r$memory_id %||% "", character(1))
+    idx <- match(memory_id, ids)
+    if (is.na(idx)) next
+    new_idx <- idx + delta
+    if (new_idx < 1 || new_idx > length(recs)) return(memory)
+    recs[c(idx, new_idx)] <- recs[c(new_idx, idx)]
+    memory[[scenario]] <- recs
+    return(memory)
+  }
+  memory
+}
+
+#' Sort-key vectors (one element per recipe) for a single criterion.
+#' Returns a list of vectors to pass to order():
+#'   name   -> empty names always last, then name (case-insensitive)
+#'   target -> molar block first, then mass block, then the normalized value
+#'   volume -> final volume in L
+recipe_sort_vectors <- function(recipes, key, desc = FALSE) {
+  dir <- if (desc) -1 else 1
+  if (key == "name") {
+    nm <- vapply(recipes, function(r) trimws(r$solution_name %||% ""), character(1))
+    empty <- as.integer(!nzchar(nm))
+    return(list(empty, dir * xtfrm(tolower(nm))))
+  }
+  if (key == "target") {
+    type <- vapply(recipes, function(r) {
+      u <- r$input_parameters$target_unit
+      if (is.null(u)) NA_character_ else get_conc_type(u)
+    }, character(1))
+    block <- match(type, c("molar", "mass"), nomatch = 3L)
+    val <- vapply(recipes, function(r)
+      as.numeric(r$normalized_parameters$target_conc_internal %||% NA_real_), numeric(1))
+    return(list(block, dir * val))
+  }
+  if (key == "volume") {
+    val <- vapply(recipes, function(r)
+      as.numeric(r$normalized_parameters$final_vol_L %||% NA_real_), numeric(1))
+    return(list(dir * val))
+  }
+  list()
+}
+
+#' Sort the recipes of one scenario by up to several criteria.
+#' @param levels list of list(key = "name"|"target"|"volume", desc = logical);
+#'   "none" keys are skipped, repeated keys use their first occurrence.
+#'   Ties keep their current relative order (stable).
+sort_scenario_recipes <- function(memory, scenario, levels) {
+  recs <- memory[[scenario]]
+  if (length(recs) < 2) return(memory)
+  keys <- vapply(levels, function(l) l$key %||% "none", character(1))
+  keep <- keys %in% SORT_KEYS & !duplicated(keys)
+  levels <- levels[keep]
+  if (length(levels) == 0) return(memory)
+
+  vecs <- do.call(c, lapply(levels, function(l)
+    recipe_sort_vectors(recs, l$key, isTRUE(l$desc))))
+  ord <- do.call(order, c(vecs, list(seq_along(recs), na.last = TRUE)))
+  memory[[scenario]] <- recs[ord]
+  memory
+}
