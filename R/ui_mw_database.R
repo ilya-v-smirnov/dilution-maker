@@ -74,6 +74,24 @@ mw_database_ui <- function(id) {
                               selected = "subst_common")
       ),
 
+      # Pipette groups: choose / create / delete (pipettes only)
+      conditionalPanel(
+        condition = is_pipettes_js,
+        wellPanel(
+          h4("Pipette Group"),
+          selectInput(ns("pip_group"), label = NULL, choices = character(0)),
+          fluidRow(class = "g-2",
+            column(8, textInput(ns("new_group_name"), label = NULL,
+                                placeholder = "New group name")),
+            column(4, actionButton(ns("create_group"), "Create", width = "100%"))
+          ),
+          actionButton(ns("delete_group"), "Delete group",
+                       class = "btn-outline-danger btn-sm", width = "100%"),
+          tags$small(class = "text-muted d-block mt-2",
+            "Add, remove and enable/disable below apply to the selected group.")
+        )
+      ),
+
       wellPanel(
         h4("Add Entry"),
         conditionalPanel(
@@ -177,6 +195,28 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
     })
 
     # Get the current dataframe
+    # ---- Pipette groups --------------------------------------------------------
+    # Selected group if it exists, else the first one (creation order)
+    current_pip_group <- reactive({
+      groups <- pipettes_db()$groups
+      g <- input$pip_group
+      if (!is.null(g) && g %in% groups) g else if (length(groups) > 0) groups[1] else NULL
+    })
+
+    # Group selector follows the database. A handler that wants a specific
+    # group selected after its save (create/delete) sets `pending_group`
+    # before committing; the sync below applies it once.
+    pending_group <- NULL
+    observeEvent(pipettes_db()$groups, {
+      groups <- pipettes_db()$groups
+      g <- pending_group %||% isolate(input$pip_group)
+      pending_group <<- NULL
+      if (is.null(g) || !g %in% groups) g <- if (length(groups) > 0) groups[1] else character(0)
+      updateSelectInput(session, "pip_group",
+                        choices = if (length(groups) > 0) groups else character(0),
+                        selected = g)
+    }, ignoreNULL = FALSE)
+
     current_df <- reactive({
       info <- db_info()
       if (info$type == "substances") {
@@ -184,14 +224,21 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
       } else if (info$type == "proteins") {
         proteins_db()[[info$sheet]]
       } else if (info$type == "pipettes") {
-        pipettes_db()$data
+        df <- group_pipettes(pipettes_db(), current_pip_group())
+        df[, setdiff(names(df), "group"), drop = FALSE]
       } else {
         stocks_db()$data
       }
     })
 
     output$current_db_title <- renderText({
-      db_info()$sheet
+      info <- db_info()
+      if (info$type == "pipettes") {
+        g <- current_pip_group()
+        if (is.null(g)) "Pipettes (no groups)" else paste0("Pipettes \u2014 ", g)
+      } else {
+        info$sheet
+      }
     })
 
     output$current_db_table <- renderTable({
@@ -245,8 +292,9 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
 
     # ---- Add entry ---------------------------------------------------------
     # Save helper for the pipettes database
-    commit_pipettes <- function(df, msg) {
-      new_db <- list(data = sort_pipettes(df), sheet_name = "Pipettes")
+    commit_pipettes <- function(df, msg, groups = isolate(pipettes_db()$groups)) {
+      new_db <- list(data = sort_pipettes(df, groups), groups = groups,
+                     sheet_name = "Pipettes")
       ok <- try(save_pipettes_db(new_db, data_dir), silent = TRUE)
       if (inherits(ok, "try-error")) {
         showNotification(paste("Could not save pipettes file:",
@@ -276,17 +324,21 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
           else if (inc > vmax) "Increment cannot exceed the max volume."
           else NULL
         df <- pipettes_db()$data
-        if (is.null(err) && any(tolower(df$name) == tolower(pname))) {
-          err <- paste0("Pipette '", pname, "' already exists. Remove it first.")
+        grp <- current_pip_group()
+        if (is.null(err) && is.null(grp)) err <- "Create a pipette group first."
+        if (is.null(err) && any(df$group == grp & tolower(df$name) == tolower(pname))) {
+          err <- paste0("Pipette '", pname, "' already exists in '", grp,
+                        "'. Remove it first.")
         }
         if (!is.null(err)) {
           showNotification(err, type = "error", duration = 4)
           return()
         }
-        new_row <- data.frame(name = pname, min_volume = vmin, max_volume = vmax,
+        new_row <- data.frame(group = grp, name = pname,
+                              min_volume = vmin, max_volume = vmax,
                               increment = inc, enabled = TRUE,
                               stringsAsFactors = FALSE)
-        if (commit_pipettes(rbind(df, new_row), paste0("Pipette '", pname, "' added."))) {
+        if (commit_pipettes(rbind(df, new_row), paste0("Pipette '", pname, "' added to '", grp, "'."))) {
           updateTextInput(session, "new_pip_name", value = "")
           for (id in c("new_pip_min", "new_pip_max", "new_pip_inc")) {
             updateNumericInput(session, id, value = NA_real_)
@@ -425,13 +477,14 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
 
       if (info$type == "pipettes") {
         df <- pipettes_db()$data
-        idx <- which(df$name == target)
+        grp <- current_pip_group()
+        idx <- which(df$group %in% grp & df$name == target)
         if (length(idx) == 0) {
           showNotification("Pipette not found.", type = "error", duration = 3)
           return()
         }
         commit_pipettes(df[-idx[1], , drop = FALSE],
-                        paste0("Pipette '", target, "' removed."))
+                        paste0("Pipette '", target, "' removed from '", grp, "'."))
         return()
       }
 
@@ -490,22 +543,84 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
                        type = "message", duration = 2)
     })
 
-    # ---- Enabled pipettes ---------------------------------------------------
+    # ---- Create / delete pipette groups -------------------------------------
+    observeEvent(input$create_group, {
+      gname <- trimws(input$new_group_name %||% "")
+      groups <- pipettes_db()$groups
+      if (!nzchar(gname)) {
+        showNotification("Group name is required.", type = "error", duration = 3)
+        return()
+      }
+      if (tolower(gname) %in% tolower(groups)) {
+        showNotification(paste0("Group '", gname, "' already exists."),
+                         type = "error", duration = 3)
+        return()
+      }
+      pending_group <<- gname
+      if (commit_pipettes(pipettes_db()$data, paste0("Group '", gname, "' created."),
+                          groups = c(groups, gname))) {
+        updateTextInput(session, "new_group_name", value = "")
+      } else {
+        pending_group <<- NULL
+      }
+    })
+
+    observeEvent(input$delete_group, {
+      grp <- current_pip_group()
+      if (is.null(grp)) return()
+      n <- sum(pipettes_db()$data$group == grp)
+      showModal(modalDialog(
+        title = "Delete pipette group",
+        paste0("Delete group '", grp, "'",
+               if (n > 0) paste0(" and its ", n, " pipette(s)") else "",
+               "? This cannot be undone."),
+        footer = tagList(
+          modalButton("Cancel"),
+          actionButton(session$ns("confirm_delete_group"), "Delete", class = "btn-danger")
+        ),
+        easyClose = TRUE
+      ))
+    })
+
+    observeEvent(input$confirm_delete_group, {
+      removeModal()
+      grp <- current_pip_group()
+      if (is.null(grp)) return()
+      df <- pipettes_db()$data
+      groups <- setdiff(pipettes_db()$groups, grp)
+      pending_group <<- if (length(groups) > 0) groups[1] else NULL
+      commit_pipettes(df[df$group != grp, , drop = FALSE],
+                      paste0("Group '", grp, "' deleted."), groups = groups)
+    })
+
+    # ---- Enabled pipettes (selected group) ----------------------------------
+    # Checkbox values are "<group>::<name>" so a late event from a
+    # previously shown group can be recognised and ignored
+    pip_key <- function(group, name) paste0(group, "::", name)
+    shown_enabled_group <- NULL
+
     # DB -> checkboxes
     observe({
-      df <- pipettes_db()$data
+      grp <- current_pip_group()
+      df <- group_pipettes(pipettes_db(), grp)
+      shown_enabled_group <<- grp
       labels <- pipette_label(df$name, df$min_volume, df$max_volume, df$increment)
       updateCheckboxGroupInput(session, "enabled_pipettes",
-                               choices = setNames(df$name, labels),
-                               selected = df$name[df$enabled])
+                               choices = setNames(pip_key(df$group, df$name), labels),
+                               selected = pip_key(df$group, df$name)[df$enabled])
     })
 
     # Checkboxes -> DB (saved immediately; no-op when already in sync)
     observeEvent(input$enabled_pipettes, {
+      grp <- shown_enabled_group
+      if (is.null(grp)) return()
+      sel <- input$enabled_pipettes %||% character(0)
+      if (!all(startsWith(sel, paste0(grp, "::")))) return()   # stale event
       df <- pipettes_db()$data
-      new_enabled <- df$name %in% (input$enabled_pipettes %||% character(0))
-      if (identical(new_enabled, df$enabled)) return()
-      df$enabled <- new_enabled
+      in_grp <- df$group == grp
+      new_enabled <- pip_key(df$group[in_grp], df$name[in_grp]) %in% sel
+      if (identical(new_enabled, df$enabled[in_grp])) return()
+      df$enabled[in_grp] <- new_enabled
       commit_pipettes(df, NULL)
     }, ignoreNULL = FALSE, ignoreInit = TRUE)
   })

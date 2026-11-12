@@ -421,7 +421,7 @@ export_scenario_excel <- function(memory, scenario, filepath, show_pipettes = TR
     prec <- r$technical_metadata$precision
     if (!is.null(prec)) {
       base$Volume_Precision <- if (identical(prec$mode, "pipette")) {
-        paste0("Pipette-based (", prec$pipettes, ")")
+        paste0("Pipette-based: ", prec$group %||% "", " (", prec$pipettes, ")")
       } else {
         paste0("Manual (stock ", prec$stock_sig, ", diluent ", prec$diluent_sig, " sig. fig.)")
       }

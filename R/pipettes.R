@@ -2,10 +2,13 @@
 # pipettes.R
 # Pipette database (data/pipettes.xlsx) and pipette-based volume precision.
 #
-# Columns: name, min_volume, max_volume, increment (all volumes in µl), enabled.
-# Rows are always kept sorted by min_volume, max_volume, increment, name.
+# Columns: group, name, min_volume, max_volume, increment (all volumes in µl),
+# enabled. Pipettes belong to named groups (e.g. "Tissue culture",
+# "Working bench"); a name is unique within its group. Group order = creation
+# order (sheet "Groups"); within a group rows are sorted by min_volume,
+# max_volume, increment, name.
 #
-# Pipette selection for a volume V (enabled pipettes only):
+# Pipette selection for a volume V (enabled pipettes of the chosen group):
 #   1. pipettes whose range covers V   -> the one with the smallest increment
 #   2. V above every range             -> the largest pipette (no warning)
 #   3. V below every range             -> the smallest pipette + warning
@@ -15,10 +18,13 @@
 # the selected pipette's increment.
 # ==============================================================================
 
-PIPETTE_COLUMNS <- c("name", "min_volume", "max_volume", "increment", "enabled")
+PIPETTE_COLUMNS <- c("group", "name", "min_volume", "max_volume", "increment", "enabled")
+
+# Group given to pipettes from files saved before groups existed
+DEFAULT_PIPETTE_GROUP <- "Working bench"
 
 empty_pipettes_df <- function() {
-  data.frame(name = character(0), min_volume = numeric(0),
+  data.frame(group = character(0), name = character(0), min_volume = numeric(0),
              max_volume = numeric(0), increment = numeric(0),
              enabled = logical(0), stringsAsFactors = FALSE)
 }
@@ -26,6 +32,7 @@ empty_pipettes_df <- function() {
 #' Built-in fallback: Gilson PIPETMAN Classic set
 get_builtin_pipettes <- function() {
   data.frame(
+    group      = DEFAULT_PIPETTE_GROUP,
     name       = c("P2",  "P10", "P20", "P100", "P200", "P1000"),
     min_volume = c(0.2,   1,     2,     10,     20,     100),
     max_volume = c(2,     10,    20,    100,    200,    1000),
@@ -35,22 +42,30 @@ get_builtin_pipettes <- function() {
   )
 }
 
-#' Sort pipettes by min_volume, max_volume, increment, then name
-sort_pipettes <- function(df) {
+#' Sort pipettes: groups in the given (creation) order, then by
+#' min_volume, max_volume, increment, name
+sort_pipettes <- function(df, groups = NULL) {
   if (is.null(df) || nrow(df) == 0) return(empty_pipettes_df())
-  df <- df[order(df$min_volume, df$max_volume, df$increment, tolower(df$name)), ,
-           drop = FALSE]
+  if (!"group" %in% names(df)) df$group <- DEFAULT_PIPETTE_GROUP
+  if (is.null(groups)) groups <- unique(df$group)
+  group_rank <- match(df$group, unique(c(groups, df$group)))
+  df <- df[order(group_rank, df$min_volume, df$max_volume, df$increment,
+                 tolower(df$name)), , drop = FALSE]
   rownames(df) <- NULL
   df
 }
 
-#' Coerce a raw table to the pipette schema (missing `enabled` -> TRUE)
+#' Coerce a raw table to the pipette schema
+#' (missing `group` -> DEFAULT_PIPETTE_GROUP, missing `enabled` -> TRUE)
 clean_pipettes_df <- function(df) {
   df <- as.data.frame(df, stringsAsFactors = FALSE)
   if (!all(c("name", "min_volume", "max_volume", "increment") %in% names(df))) {
     return(NULL)
   }
   if (!"enabled" %in% names(df)) df$enabled <- TRUE
+  if (!"group" %in% names(df)) df$group <- DEFAULT_PIPETTE_GROUP
+  df$group <- trimws(as.character(df$group))
+  df$group[is.na(df$group) | !nzchar(df$group)] <- DEFAULT_PIPETTE_GROUP
   df$name       <- trimws(as.character(df$name))
   df$min_volume <- as.numeric(df$min_volume)
   df$max_volume <- as.numeric(df$max_volume)
@@ -62,22 +77,36 @@ clean_pipettes_df <- function(df) {
   ok <- !is.na(df$name) & nzchar(df$name) &
         is.finite(df$min_volume) & is.finite(df$max_volume) &
         is.finite(df$increment) & df$increment > 0
-  sort_pipettes(df[ok, PIPETTE_COLUMNS, drop = FALSE])
+  df[ok, PIPETTE_COLUMNS, drop = FALSE]
 }
 
-#' Load the pipette database; falls back to the built-in set
+#' Load the pipette database; falls back to the built-in set.
+#' Sheet "Pipettes" holds the pipettes, sheet "Groups" the group names in
+#' creation order (also keeps empty groups).
+#' @return list(data, groups, sheet_name)
 load_pipettes_db <- function(data_dir = "data") {
   xlsx_path <- file.path(data_dir, "pipettes.xlsx")
   df <- NULL
+  groups <- character(0)
   if (file.exists(xlsx_path) && requireNamespace("readxl", quietly = TRUE)) {
-    df <- tryCatch(clean_pipettes_df(readxl::read_excel(xlsx_path, sheet = 1)),
+    sheets <- tryCatch(readxl::excel_sheets(xlsx_path), error = function(e) character(0))
+    pip_sheet <- if ("Pipettes" %in% sheets) "Pipettes" else 1
+    df <- tryCatch(clean_pipettes_df(readxl::read_excel(xlsx_path, sheet = pip_sheet)),
                    error = function(e) {
                      message("Could not read pipettes file ", xlsx_path, ": ", e$message)
                      NULL
                    })
+    if ("Groups" %in% sheets) {
+      g <- tryCatch(readxl::read_excel(xlsx_path, sheet = "Groups")$group,
+                    error = function(e) NULL)
+      g <- trimws(as.character(g %||% character(0)))
+      groups <- g[!is.na(g) & nzchar(g)]
+    }
   }
-  if (is.null(df)) df <- sort_pipettes(get_builtin_pipettes())
-  list(data = df, sheet_name = "Pipettes")
+  if (is.null(df)) df <- get_builtin_pipettes()
+  groups <- unique(c(groups, df$group))
+  if (length(groups) == 0) groups <- DEFAULT_PIPETTE_GROUP
+  list(data = sort_pipettes(df, groups), groups = groups, sheet_name = "Pipettes")
 }
 
 #' Save the pipette database (sorted) to data/pipettes.xlsx
@@ -86,22 +115,34 @@ save_pipettes_db <- function(pipettes_db, data_dir = "data") {
     stop("Package 'openxlsx' is required to save the pipettes database.")
   }
   if (!dir.exists(data_dir)) dir.create(data_dir, recursive = TRUE)
-  df <- sort_pipettes(pipettes_db$data)
-  openxlsx::write.xlsx(list(Pipettes = df), file.path(data_dir, "pipettes.xlsx"),
-                       overwrite = TRUE)
+  groups <- pipettes_db$groups %||% unique(pipettes_db$data$group)
+  df <- sort_pipettes(pipettes_db$data, groups)
+  openxlsx::write.xlsx(
+    list(Pipettes = df,
+         Groups   = data.frame(group = groups, stringsAsFactors = FALSE)),
+    file.path(data_dir, "pipettes.xlsx"), overwrite = TRUE)
 }
 
-#' Enabled pipettes only (sorted)
-enabled_pipettes <- function(pipettes_db) {
+#' All pipettes of one group (sorted)
+group_pipettes <- function(pipettes_db, group) {
+  df <- pipettes_db$data
+  if (is.null(df) || nrow(df) == 0 || is.null(group)) return(empty_pipettes_df())
+  sort_pipettes(df[df$group == group, , drop = FALSE])
+}
+
+#' Enabled pipettes, optionally of one group only (sorted)
+enabled_pipettes <- function(pipettes_db, group = NULL) {
   df <- pipettes_db$data
   if (is.null(df) || nrow(df) == 0) return(empty_pipettes_df())
-  sort_pipettes(df[df$enabled, , drop = FALSE])
+  keep <- df$enabled
+  if (!is.null(group)) keep <- keep & df$group == group
+  sort_pipettes(df[keep, , drop = FALSE])
 }
 
 #' Human-readable pipette label: "P20 (2–20 µl, step 0.02 µl)"
 pipette_label <- function(name, min_volume, max_volume, increment) {
-  paste0(name, " (", num_plain(min_volume), "–", num_plain(max_volume),
-         " µl, step ", num_plain(increment), " µl)")
+  paste0(name, " (", num_plain(min_volume), "\u2013", num_plain(max_volume),
+         " \u00b5l, step ", num_plain(increment), " \u00b5l)")
 }
 
 num_plain <- function(x) trimws(format(x, scientific = FALSE, drop0trailing = TRUE))
@@ -140,19 +181,21 @@ select_pipette <- function(vol_ul, pipettes) {
 
 # --- Formatting --------------------------------------------------------------
 
-#' Round a volume (µl) to a multiple of the pipette increment (µl)
+#' Round a volume (µl) to a multiple of the pipette increment (µl).
+#' Exact halves round up; the small tolerance absorbs floating-point noise so
+#' e.g. 96.3 µl with a 0.2 µl increment always gives 96.4 µl.
 round_to_increment <- function(vol_ul, increment) {
-  round(round(vol_ul / increment) * increment, 10)
+  round(floor(vol_ul / increment + 0.5 + 1e-9) * increment, 10)
 }
 
 #' Format a volume rounded to a pipette increment, in the auto-chosen unit.
 #' Decimals follow the increment; trailing zeros are dropped (app convention).
 format_volume_increment <- function(value_L, increment_ul) {
-  rounded_ul <- round_to_increment(L_to_volume(value_L, "µl"), increment_ul)
-  rounded_L  <- volume_to_L(rounded_ul, "µl")
+  rounded_ul <- round_to_increment(L_to_volume(value_L, "\u00b5l"), increment_ul)
+  rounded_L  <- volume_to_L(rounded_ul, "\u00b5l")
   unit <- best_volume_unit(rounded_L)
   shown <- L_to_volume(rounded_L, unit)
-  inc_in_unit <- L_to_volume(volume_to_L(increment_ul, "µl"), unit)
+  inc_in_unit <- L_to_volume(volume_to_L(increment_ul, "\u00b5l"), unit)
   digits <- max(0, ceiling(-log10(inc_in_unit) - 1e-9))
   txt <- formatC(shown, format = "f", digits = digits)
   if (digits > 0) txt <- sub("\\.?0+$", "", txt)
@@ -177,11 +220,11 @@ format_volume_precise <- function(value_L, precision = NULL, role = "stock") {
     if (!is.finite(value_L) || value_L <= 0) {
       return(list(text = format_volume(value_L), pipette = NULL, warning = character(0)))
     }
-    vol_ul <- L_to_volume(value_L, "µl")
+    vol_ul <- L_to_volume(value_L, "\u00b5l")
     sel <- select_pipette(vol_ul, precision$pipettes)
     if (is.null(sel)) {
       return(list(text = format_volume(value_L), pipette = NULL,
-                  warning = "No pipettes are enabled: volumes shown with 3 significant figures."))
+                  warning = "No pipettes are enabled in the selected group: volumes shown with 3 significant figures."))
     }
     warn <- character(0)
     if (sel$status == "below_min") {
@@ -224,9 +267,11 @@ recipe_text <- function(r, show_pipettes = TRUE) {
 #' Compact, storable description of precision settings (for metadata)
 precision_summary <- function(precision) {
   if (is.null(precision)) precision <- default_precision()
+  pip_mode <- is_pipette_mode(precision)
   list(mode        = precision$mode %||% "manual",
        stock_sig   = precision$stock_sig %||% NA_real_,
        diluent_sig = precision$diluent_sig %||% NA_real_,
-       pipettes    = if (is_pipette_mode(precision) && !is.null(precision$pipettes))
+       group       = if (pip_mode) precision$group %||% NA_character_ else NA_character_,
+       pipettes    = if (pip_mode && !is.null(precision$pipettes))
                        paste(precision$pipettes$name, collapse = ", ") else NA_character_)
 }
