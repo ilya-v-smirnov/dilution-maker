@@ -51,8 +51,8 @@ ui <- tagList(
       saved_recipes_ui("recipes")
     ),
 
-    # --- Tab 6: MW Database (refactored into its own module) ---
-    tabPanel("MW Database",
+    # --- Tab 6: Databases (MW, stocks; module in R/ui_mw_database.R) ---
+    tabPanel("Databases",
       icon = icon("database"),
       mw_database_ui("mw_db")
     )

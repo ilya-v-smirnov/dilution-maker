@@ -1,10 +1,57 @@
 # ==============================================================================
 # ui_mw_database.R
-# MW Database tab: left panel selector + add/remove forms,
+# Databases tab: left panel selector + add/remove forms,
 # right panel shows the currently selected database table.
 # Operates on three reactives: proteins_db, substances_db, stocks_db.
 # Saves changes back to the corresponding xlsx files.
 # ==============================================================================
+
+# Database selector groups: group title -> c(label = value).
+# Add a new group/entry here to make it appear in the selector.
+DB_SELECTOR_GROUPS <- list(
+  "Dry substances" = c(
+    "Common substances" = "subst_common",
+    "Custom substances" = "subst_custom"
+  ),
+  "Proteins" = c(
+    "Common proteins"   = "prot_common",
+    "Custom proteins"   = "prot_custom",
+    "Available stocks"  = "stocks"
+  )
+)
+
+# A single Shiny radio-button input whose options are visually split into
+# titled groups. Markup mirrors shiny::radioButtons(), so the standard
+# radio input binding reads it and input[[inputId]] behaves as usual.
+grouped_radio_buttons <- function(inputId, groups, selected = NULL) {
+  all_values <- unlist(groups, use.names = FALSE)
+  if (is.null(selected)) selected <- all_values[1]
+
+  option_tag <- function(label, value) {
+    tags$div(class = "radio ms-3",
+      tags$label(
+        tags$input(type = "radio", name = inputId, value = value,
+                   checked = if (identical(value, selected)) "checked" else NULL),
+        tags$span(label)
+      )
+    )
+  }
+
+  group_tags <- lapply(seq_along(groups), function(i) {
+    opts <- groups[[i]]
+    tagList(
+      tags$div(class = paste("fw-bold text-muted small text-uppercase",
+                             if (i > 1) "mt-3" else ""),
+               names(groups)[i]),
+      mapply(option_tag, names(opts), unname(opts), SIMPLIFY = FALSE)
+    )
+  })
+
+  tags$div(id = inputId,
+           class = "form-group shiny-input-radiogroup shiny-input-container",
+           role = "radiogroup",
+           tags$div(class = "shiny-options-group", group_tags))
+}
 
 mw_database_ui <- function(id) {
   ns <- NS(id)
@@ -17,16 +64,8 @@ mw_database_ui <- function(id) {
     column(4,
       wellPanel(
         h4("Database"),
-        radioButtons(ns("db_selector"), label = NULL,
-          choices = c(
-            "Common substances" = "subst_common",
-            "Custom substances" = "subst_custom",
-            "Common proteins"   = "prot_common",
-            "Custom proteins"   = "prot_custom",
-            "Available stocks"  = "stocks"
-          ),
-          selected = "subst_common"
-        )
+        grouped_radio_buttons(ns("db_selector"), DB_SELECTOR_GROUPS,
+                              selected = "subst_common")
       ),
 
       wellPanel(

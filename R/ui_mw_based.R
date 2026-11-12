@@ -193,7 +193,7 @@ mw_based_server <- function(id, memory, mw_db, stocks_db) {
       if (length(v$labels) == 0) {
         return(tags$div(class = "alert alert-warning small",
           paste0("No stocks found for '", info$substance,
-                 "'. Add one in the MW Database tab.")))
+                 "'. Add one in the Databases tab.")))
       }
       NULL
     })
