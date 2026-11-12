@@ -70,16 +70,7 @@ mw_based_ui <- function(id) {
           ),
           textInput(ns("diluent"), "Diluent", value = "PBS")
         ),
-        wellPanel(id = ns("precision_panel"),
-            h4("Volume Precision"),
-            tags$small(class = "text-muted",
-                       "Significant figures used to round stock and diluent volumes."),
-            br(), br(),
-            fluidRow(
-                column(6, numericInput(ns("stock_precision"),  "Stock volume",   value = 3, min = 1, max = 10, step = 1)),
-                column(6, numericInput(ns("diluent_precision"), "Diluent volume", value = 3, min = 1, max = 10, step = 1))
-            )
-        )
+        volume_precision_ui(ns)
       ),
       column(8,
         wellPanel(
@@ -104,8 +95,11 @@ mw_based_ui <- function(id) {
   )
 }
 
-mw_based_server <- function(id, memory, mw_db, stocks_db) {
+mw_based_server <- function(id, memory, mw_db, stocks_db, pipettes_db) {
   moduleServer(id, function(input, output, session) {
+
+    # --- Volume precision settings (shared panel) ---
+    precision <- volume_precision_server(input, output, pipettes_db)
 
     # Update MW source radio buttons from real sheet names
     observe({
@@ -239,8 +233,7 @@ mw_based_server <- function(id, memory, mw_db, stocks_db) {
       req(!is.na(info$mw), info$mw > 0)
       req(input$stock_val, input$target_val, input$final_vol)
       req(input$stock_val > 0, input$target_val > 0, input$final_vol > 0)
-      req(input$stock_precision, input$diluent_precision)
-      req(input$stock_precision >= 1, input$diluent_precision >= 1)
+      prec <- precision()
 
       if (isTRUE(input$use_stock)) {
         # Only proceed when a stock is actually resolved
@@ -258,14 +251,13 @@ mw_based_server <- function(id, memory, mw_db, stocks_db) {
         final_vol         = input$final_vol,
         final_vol_unit    = input$final_vol_unit,
         diluent           = input$diluent,
-        stock_precision   = input$stock_precision,
-        diluent_precision = input$diluent_precision
+        precision         = prec
       )
     })
 
     output$instruction_text <- renderText({
       req(result())
-      result()$instruction_text
+      recipe_text(result(), precision()$show_pipettes)
     })
     
     # Prominent visual alert if diluent volume is negative
@@ -297,8 +289,10 @@ mw_based_server <- function(id, memory, mw_db, stocks_db) {
       req(result())
       res <- result()
       s <- res$steps[[1]]
-      sp <- res$technical_metadata$stock_precision
-      dp <- res$technical_metadata$diluent_precision
+      show_pip <- isTRUE(precision()$show_pipettes)
+      vol_txt <- function(text, pipette) {
+        if (show_pip) volume_with_pipette(list(text = text, pipette = pipette)) else text
+      }
       data.frame(
         Parameter = c("Substance", "MW (Da)", "MW Source",
                        "Dilution Factor", "Stock Volume", "Diluent Volume"),
@@ -307,8 +301,8 @@ mw_based_server <- function(id, memory, mw_db, stocks_db) {
           format(res$technical_metadata$mw, big.mark = ","),
           res$technical_metadata$mw_source,
           format_df(s$dilution_factor),
-          format_volume_sig(s$stock_volume_L, sp),
-          format_volume_sig(s$diluent_volume_L, dp)
+          vol_txt(s$stock_volume_fmt, s$stock_pipette),
+          vol_txt(s$diluent_volume_fmt, s$diluent_pipette)
         ),
         stringsAsFactors = FALSE
       )

@@ -54,7 +54,8 @@ single_dilution_ui <- function(id) {
           ),
           textInput(ns("diluent"), "Diluent", value = "PBS"),
           checkboxInput(ns("use_approx"), "Use approximation when DF > 100", value = TRUE)
-        )
+        ),
+        volume_precision_ui(ns)
       ),
       column(8,
         wellPanel(
@@ -79,9 +80,12 @@ single_dilution_ui <- function(id) {
   )
 }
 
-single_dilution_server <- function(id, memory, stocks_db) {
+single_dilution_server <- function(id, memory, stocks_db, pipettes_db) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
+
+    # --- Volume precision settings (shared panel) ---
+    precision <- volume_precision_server(input, output, pipettes_db)
 
     # --- Populate substance dropdown when stocks change or checkbox toggles ---
     observe({
@@ -172,13 +176,14 @@ single_dilution_server <- function(id, memory, stocks_db) {
         final_vol_unit = input$final_vol_unit,
         diluent        = input$diluent,
         solution_name  = effective_solution_name(),
-        use_approximation = input$use_approx
+        use_approximation = input$use_approx,
+        precision      = precision()
       )
     })
 
     output$instruction_text <- renderText({
       req(result())
-      result()$instruction_text
+      recipe_text(result(), precision()$show_pipettes)
     })
 
     # Show why nothing is calculated (e.g. stock below target, incompatible units)
@@ -205,13 +210,17 @@ single_dilution_server <- function(id, memory, stocks_db) {
       req(result())
       res <- result()
       s <- res$steps[[1]]
+      show_pip <- isTRUE(precision()$show_pipettes)
+      vol_txt <- function(text, pipette) {
+        if (show_pip) volume_with_pipette(list(text = text, pipette = pipette)) else text
+      }
       data.frame(
         Parameter = c("Dilution Factor", "Stock Volume", "Diluent Volume",
                        "Final Volume", "Approximation"),
         Value = c(
           format_df(s$dilution_factor),
-          format_volume(s$stock_volume_L),
-          format_volume(s$diluent_volume_L),
+          vol_txt(s$stock_volume_fmt, s$stock_pipette),
+          vol_txt(s$diluent_volume_fmt, s$diluent_pipette),
           format_volume(res$normalized_parameters$final_vol_L),
           if (res$technical_metadata$approximation_used) "Yes" else "No"
         ),

@@ -2,8 +2,8 @@
 # ui_mw_database.R
 # Databases tab: left panel selector + add/remove forms,
 # right panel shows the currently selected database table.
-# Operates on three reactives: proteins_db, substances_db, stocks_db.
-# Saves changes back to the corresponding xlsx files.
+# Operates on four reactives: proteins_db, substances_db, stocks_db,
+# pipettes_db. Saves changes back to the corresponding xlsx files.
 # ==============================================================================
 
 # Database selector groups: group title -> c(label = value).
@@ -17,6 +17,9 @@ DB_SELECTOR_GROUPS <- list(
     "Common proteins"   = "prot_common",
     "Custom proteins"   = "prot_custom",
     "Available stocks"  = "stocks"
+  ),
+  "Equipment" = c(
+    "Pipettes"          = "pipettes"
   )
 )
 
@@ -56,8 +59,11 @@ grouped_radio_buttons <- function(inputId, groups, selected = NULL) {
 mw_database_ui <- function(id) {
   ns <- NS(id)
 
-  is_stocks_js <- paste0("input['", ns("db_selector"), "'] == 'stocks'")
-  is_mw_js     <- paste0("input['", ns("db_selector"), "'] != 'stocks'")
+  sel_js <- paste0("input['", ns("db_selector"), "']")
+  is_stocks_js     <- paste0(sel_js, " == 'stocks'")
+  is_pipettes_js   <- paste0(sel_js, " == 'pipettes'")
+  not_pipettes_js  <- paste0(sel_js, " != 'pipettes'")
+  is_mw_js         <- paste0(sel_js, " != 'stocks' && ", sel_js, " != 'pipettes'")
 
   fluidRow(
     # ----- Left panel: navigation + add/remove -------------------------------
@@ -70,7 +76,24 @@ mw_database_ui <- function(id) {
 
       wellPanel(
         h4("Add Entry"),
-        textInput(ns("new_substance"), "Substance name", placeholder = "e.g. NaCl"),
+        conditionalPanel(
+          condition = not_pipettes_js,
+          textInput(ns("new_substance"), "Substance name", placeholder = "e.g. NaCl")
+        ),
+
+        # Pipette-specific fields (all volumes in µl)
+        conditionalPanel(
+          condition = is_pipettes_js,
+          textInput(ns("new_pip_name"), "Pipette name", placeholder = "e.g. P20"),
+          fluidRow(
+            column(6, numericInput(ns("new_pip_min"), "Min volume (\u00b5l)",
+                                   value = NA_real_, min = 0, step = 0.1)),
+            column(6, numericInput(ns("new_pip_max"), "Max volume (\u00b5l)",
+                                   value = NA_real_, min = 0, step = 0.1))
+          ),
+          numericInput(ns("new_pip_inc"), "Increment (\u00b5l)",
+                       value = NA_real_, min = 0, step = 0.001)
+        ),
 
         # MW field for protein/substance databases
         conditionalPanel(
@@ -97,9 +120,23 @@ mw_database_ui <- function(id) {
                      class = "btn-success", width = "100%")
       ),
 
+      # Enable / disable pipettes without deleting them (saved to the file)
+      conditionalPanel(
+        condition = is_pipettes_js,
+        wellPanel(
+          h4("Enabled Pipettes"),
+          tags$small(class = "text-muted",
+            "Only enabled pipettes are used for pipette-based volume precision. ",
+            "Changes are saved immediately."),
+          checkboxGroupInput(ns("enabled_pipettes"), label = NULL,
+                             choices = character(0))
+        )
+      ),
+
       wellPanel(
         h4("Remove Entry"),
-        selectInput(ns("remove_substance"), "Substance",
+        selectInput(ns("remove_substance"),
+                    label = textOutput(ns("remove_label"), inline = TRUE),
                     choices = character(0)),
         # Variant selector for stocks (multiple variants per substance)
         conditionalPanel(
@@ -123,7 +160,7 @@ mw_database_ui <- function(id) {
 }
 
 mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
-                               data_dir = "data") {
+                               pipettes_db, data_dir = "data") {
   moduleServer(id, function(input, output, session) {
 
     # Map the selector value to (type, sheet) pair
@@ -134,6 +171,7 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
         "prot_common"  = list(type = "proteins",   sheet = "Common proteins"),
         "prot_custom"  = list(type = "proteins",   sheet = "Custom proteins"),
         "stocks"       = list(type = "stocks",     sheet = "Available stocks"),
+        "pipettes"     = list(type = "pipettes",   sheet = "Pipettes"),
         list(type = "substances", sheet = "Common substances")
       )
     })
@@ -145,6 +183,8 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
         substances_db()[[info$sheet]]
       } else if (info$type == "proteins") {
         proteins_db()[[info$sheet]]
+      } else if (info$type == "pipettes") {
+        pipettes_db()$data
       } else {
         stocks_db()$data
       }
@@ -158,20 +198,35 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
       df <- current_df()
       if (is.null(df) || nrow(df) == 0) return(data.frame(Note = "No entries."))
       out <- df
+      if (db_info()$type == "pipettes") {
+        for (col in c("min_volume", "max_volume", "increment")) {
+          out[[col]] <- vapply(out[[col]], num_plain, character(1))
+        }
+        out$enabled <- ifelse(out$enabled, "Yes", "No")
+        names(out) <- c("name", "min_volume, \u00b5l", "max_volume, \u00b5l",
+                        "increment, \u00b5l", "enabled")
+        return(out)
+      }
       if ("MW" %in% names(out)) out$MW <- format(out$MW, big.mark = ",")
       if ("conc" %in% names(out)) out$conc <- format(out$conc)
       out
     }, striped = TRUE, hover = TRUE, width = "100%")
 
+    output$remove_label <- renderText({
+      if (db_info()$type == "pipettes") "Pipette" else "Substance"
+    })
+
     # ---- Update Remove dropdown when DB or contents change -----------------
     observe({
       df <- current_df()
+      is_pip <- db_info()$type == "pipettes"
       if (is.null(df) || nrow(df) == 0) {
         updateSelectInput(session, "remove_substance",
                           choices = character(0), selected = character(0))
         return()
       }
-      substances <- sort(unique(df$substance))
+      # Pipettes keep their volume order; other databases are alphabetical
+      substances <- if (is_pip) df$name else sort(unique(df$substance))
       updateSelectInput(session, "remove_substance",
                         choices = substances,
                         selected = if (length(substances) > 0) substances[1] else character(0))
@@ -189,8 +244,57 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
     })
 
     # ---- Add entry ---------------------------------------------------------
+    # Save helper for the pipettes database
+    commit_pipettes <- function(df, msg) {
+      new_db <- list(data = sort_pipettes(df), sheet_name = "Pipettes")
+      ok <- try(save_pipettes_db(new_db, data_dir), silent = TRUE)
+      if (inherits(ok, "try-error")) {
+        showNotification(paste("Could not save pipettes file:",
+                               attr(ok, "condition")$message),
+                         type = "error", duration = 6)
+        return(FALSE)
+      }
+      pipettes_db(new_db)
+      if (!is.null(msg)) showNotification(msg, type = "message", duration = 2)
+      TRUE
+    }
+
     observeEvent(input$add_btn, {
       info <- db_info()
+
+      if (info$type == "pipettes") {
+        # ---- Adding a pipette ----
+        pname <- trimws(input$new_pip_name %||% "")
+        vmin <- input$new_pip_min
+        vmax <- input$new_pip_max
+        inc  <- input$new_pip_inc
+        bad <- function(x) is.null(x) || is.na(x) || x <= 0
+        err <- if (!nzchar(pname)) "Pipette name is required."
+          else if (bad(vmin) || bad(vmax) || bad(inc))
+            "Min volume, max volume and increment must be positive numbers."
+          else if (vmax <= vmin) "Max volume must be greater than min volume."
+          else if (inc > vmax) "Increment cannot exceed the max volume."
+          else NULL
+        df <- pipettes_db()$data
+        if (is.null(err) && any(tolower(df$name) == tolower(pname))) {
+          err <- paste0("Pipette '", pname, "' already exists. Remove it first.")
+        }
+        if (!is.null(err)) {
+          showNotification(err, type = "error", duration = 4)
+          return()
+        }
+        new_row <- data.frame(name = pname, min_volume = vmin, max_volume = vmax,
+                              increment = inc, enabled = TRUE,
+                              stringsAsFactors = FALSE)
+        if (commit_pipettes(rbind(df, new_row), paste0("Pipette '", pname, "' added."))) {
+          updateTextInput(session, "new_pip_name", value = "")
+          for (id in c("new_pip_min", "new_pip_max", "new_pip_inc")) {
+            updateNumericInput(session, id, value = NA_real_)
+          }
+        }
+        return()
+      }
+
       name <- trimws(input$new_substance %||% "")
 
       if (!nzchar(name)) {
@@ -319,6 +423,18 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
         return()
       }
 
+      if (info$type == "pipettes") {
+        df <- pipettes_db()$data
+        idx <- which(df$name == target)
+        if (length(idx) == 0) {
+          showNotification("Pipette not found.", type = "error", duration = 3)
+          return()
+        }
+        commit_pipettes(df[-idx[1], , drop = FALSE],
+                        paste0("Pipette '", target, "' removed."))
+        return()
+      }
+
       if (info$type == "stocks") {
         variant <- input$remove_variant
         if (is.null(variant) || !nzchar(variant)) {
@@ -373,5 +489,24 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
       showNotification(paste0("Removed '", target, "' from ", info$sheet, "."),
                        type = "message", duration = 2)
     })
+
+    # ---- Enabled pipettes ---------------------------------------------------
+    # DB -> checkboxes
+    observe({
+      df <- pipettes_db()$data
+      labels <- pipette_label(df$name, df$min_volume, df$max_volume, df$increment)
+      updateCheckboxGroupInput(session, "enabled_pipettes",
+                               choices = setNames(df$name, labels),
+                               selected = df$name[df$enabled])
+    })
+
+    # Checkboxes -> DB (saved immediately; no-op when already in sync)
+    observeEvent(input$enabled_pipettes, {
+      df <- pipettes_db()$data
+      new_enabled <- df$name %in% (input$enabled_pipettes %||% character(0))
+      if (identical(new_enabled, df$enabled)) return()
+      df$enabled <- new_enabled
+      commit_pipettes(df, NULL)
+    }, ignoreNULL = FALSE, ignoreInit = TRUE)
   })
 }

@@ -14,6 +14,13 @@ saved_recipes_ui <- function(id) {
             column(4, h4(textOutput(ns("total_count")))),
             column(4, downloadButton(ns("export_word"), "Export All (Word)", class = "btn-info")),
             column(4, actionButton(ns("clear_all"), "Clear All Memory", class = "btn-danger"))
+          ),
+          # Display/export options (second row, under the buttons)
+          fluidRow(class = "mt-2",
+            column(8, offset = 4,
+              checkboxInput(ns("show_pipettes"), "Show pipette in instruction",
+                            value = FALSE)
+            )
           )
         )
       )
@@ -62,6 +69,7 @@ saved_recipes_server <- function(id, memory) {
       renderUI({
         mem <- memory()
         recipes <- mem[[scenario]]
+        show_pip <- isTRUE(input$show_pipettes)
         if (length(recipes) == 0) {
           return(tags$p(class = "text-muted", "No saved recipes."))
         }
@@ -71,7 +79,7 @@ saved_recipes_server <- function(id, memory) {
             fluidRow(
               column(10,
                 tags$pre(style = "white-space: pre-wrap; background: #f8f9fa; padding: 10px;",
-                  r$instruction_text
+                  recipe_text(r, show_pip)
                 )
               ),
               column(2,
@@ -137,7 +145,8 @@ saved_recipes_server <- function(id, memory) {
         paste0("lab_instructions_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".docx")
       },
       content = function(file) {
-        export_word_document(memory(), file)
+        export_word_document(memory(), file,
+                             show_pipettes = isTRUE(input$show_pipettes))
       }
     )
 
@@ -148,7 +157,8 @@ saved_recipes_server <- function(id, memory) {
           paste0(filename_base, "_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".xlsx")
         },
         content = function(file) {
-          export_scenario_excel(memory(), scenario, file)
+          export_scenario_excel(memory(), scenario, file,
+                                show_pipettes = isTRUE(input$show_pipettes))
         }
       )
     }
@@ -164,7 +174,7 @@ saved_recipes_server <- function(id, memory) {
 # Export functions (Word and Excel)
 # ==============================================================================
 
-export_word_document <- function(memory, filepath) {
+export_word_document <- function(memory, filepath, show_pipettes = TRUE) {
   if (!requireNamespace("officer", quietly = TRUE)) {
     # Fail the download explicitly instead of delivering an empty file
     stop("Package 'officer' is required for Word export.")
@@ -197,7 +207,7 @@ export_word_document <- function(memory, filepath) {
     doc <- officer::body_add_par(doc, "")
 
     for (r in recipes) {
-      lines <- strsplit(r$instruction_text, "\n")[[1]]
+      lines <- strsplit(recipe_text(r, show_pipettes), "\n")[[1]]
       first_done <- FALSE
 
       for (line in lines) {
@@ -234,7 +244,7 @@ export_word_document <- function(memory, filepath) {
   print(doc, target = filepath)
 }
 
-export_scenario_excel <- function(memory, scenario, filepath) {
+export_scenario_excel <- function(memory, scenario, filepath, show_pipettes = TRUE) {
   if (!requireNamespace("openxlsx", quietly = TRUE)) {
     stop("Package 'openxlsx' is required for Excel export.")
   }
@@ -251,11 +261,21 @@ export_scenario_excel <- function(memory, scenario, filepath) {
   rows <- lapply(recipes, function(r) {
     base <- data.frame(
       Solution = r$solution_name,
-      Instruction = r$instruction_text,
+      Instruction = recipe_text(r, show_pipettes),
       Warnings = paste(r$warnings, collapse = "; "),
       Timestamp = format(r$saved_at, "%Y-%m-%d %H:%M:%S"),
       stringsAsFactors = FALSE
     )
+
+    # Volume precision used for displayed volumes (absent for dry substance)
+    prec <- r$technical_metadata$precision
+    if (!is.null(prec)) {
+      base$Volume_Precision <- if (identical(prec$mode, "pipette")) {
+        paste0("Pipette-based (", prec$pipettes, ")")
+      } else {
+        paste0("Manual (stock ", prec$stock_sig, ", diluent ", prec$diluent_sig, " sig. fig.)")
+      }
+    }
 
     ip <- r$input_parameters
     if (scenario == "single_dilution") {

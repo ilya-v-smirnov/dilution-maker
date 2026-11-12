@@ -58,6 +58,8 @@ convert_with_mw <- function(value, from_unit, to_unit, mw) {
 #' @param diluent Diluent name
 #' @param stock_precision Significant figures for stock volume display (default 3)
 #' @param diluent_precision Significant figures for diluent volume display (default 3)
+#' @param precision Volume precision settings (see format_volume_precise());
+#'   when NULL, manual mode with stock_precision / diluent_precision is used
 #' @return Structured result object
 calculate_mw_based_preparation <- function(substance, mw, mw_source,
                                            stock_val, stock_unit,
@@ -65,7 +67,12 @@ calculate_mw_based_preparation <- function(substance, mw, mw_source,
                                            final_vol, final_vol_unit,
                                            diluent = "PBS",
                                            stock_precision = 3,
-                                           diluent_precision = 3) {
+                                           diluent_precision = 3,
+                                           precision = NULL) {
+  if (is.null(precision)) {
+    precision <- list(mode = "manual", stock_sig = stock_precision,
+                      diluent_sig = diluent_precision)
+  }
 
   stock_type <- get_conc_type(stock_unit)
   target_type <- get_conc_type(target_unit)
@@ -90,39 +97,43 @@ calculate_mw_based_preparation <- function(substance, mw, mw_source,
     final_vol_unit = final_vol_unit,
     diluent = diluent,
     solution_name = substance,
-    use_approximation = TRUE
+    use_approximation = TRUE,
+    precision = precision
   )
 
   # Override scenario type and add MW info
   result$scenario_type <- "mw_based_preparation"
 
-  # Rebuild instruction text with structured format
+  # Rebuild instruction text with structured format (plain and with pipettes)
   s <- result$steps[[1]]
-  stock_vol_fmt <- format_volume_sig(s$stock_volume_L, stock_precision)
-  diluent_vol_fmt <- format_volume_sig(s$diluent_volume_L, diluent_precision)
   target_conc_fmt <- format_conc_in_unit(result$normalized_parameters$target_conc_internal, target_unit)
   original_stock_str <- paste0(sig3(stock_val), " ", stock_unit)
   label <- if (nzchar(substance)) substance else "substance"
 
-  if (stock_type != target_type) {
+  stock_line <- if (stock_type != target_type) {
     converted_stock_str <- paste0(sig3(effective_stock_val), " ", effective_stock_unit)
-    result$instruction_text <- paste0(
-      label, "\n",
-      "Stock: ", original_stock_str, " = ", converted_stock_str,
-      " (MW: ", sig3(mw), " Da)",
-      " \u2192 ", target_conc_fmt, " in ", diluent, "\n",
-      stock_vol_fmt, " stock + ", diluent_vol_fmt, " ", diluent,
-      " | DF: ", format_df(s$dilution_factor)
-    )
+    paste0("Stock: ", original_stock_str, " = ", converted_stock_str,
+           " (MW: ", sig3(mw), " Da)")
   } else {
-    result$instruction_text <- paste0(
+    paste0("Stock: ", original_stock_str)
+  }
+
+  build_instruction <- function(stock_vol_fmt, diluent_vol_fmt) {
+    paste0(
       label, "\n",
-      "Stock: ", original_stock_str,
-      " \u2192 ", target_conc_fmt, " in ", diluent, "\n",
+      stock_line, " \u2192 ", target_conc_fmt, " in ", diluent, "\n",
       stock_vol_fmt, " stock + ", diluent_vol_fmt, " ", diluent,
       " | DF: ", format_df(s$dilution_factor)
     )
   }
+  with_pip <- function(text, pipette) {
+    volume_with_pipette(list(text = text, pipette = pipette))
+  }
+  result$instruction_text <- build_instruction(s$stock_volume_fmt, s$diluent_volume_fmt)
+  result$instruction_text_pipettes <- build_instruction(
+    with_pip(s$stock_volume_fmt, s$stock_pipette),
+    with_pip(s$diluent_volume_fmt, s$diluent_pipette)
+  )
 
   # Add MW metadata
   result$input_parameters$substance <- substance
@@ -130,12 +141,12 @@ calculate_mw_based_preparation <- function(substance, mw, mw_source,
   result$input_parameters$mw_source <- mw_source
   result$input_parameters$original_stock_val <- stock_val
   result$input_parameters$original_stock_unit <- stock_unit
-  result$input_parameters$stock_precision <- stock_precision
-  result$input_parameters$diluent_precision <- diluent_precision
+  result$input_parameters$stock_precision <- precision$stock_sig %||% NA_real_
+  result$input_parameters$diluent_precision <- precision$diluent_sig %||% NA_real_
   result$technical_metadata$mw <- mw
   result$technical_metadata$mw_source <- mw_source
-  result$technical_metadata$stock_precision <- stock_precision
-  result$technical_metadata$diluent_precision <- diluent_precision
+  result$technical_metadata$stock_precision <- precision$stock_sig %||% NA_real_
+  result$technical_metadata$diluent_precision <- precision$diluent_sig %||% NA_real_
 
   result
 }

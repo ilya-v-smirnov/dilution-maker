@@ -16,6 +16,8 @@
 #' @param max_df_per_step Maximum dilution factor per step (default 500)
 #' @param min_pipette_vol_ul Minimum pipetting volume in µl (default 0.5)
 #' @param preferred_intermediate_vol_ul Preferred intermediate volume in µl (default 500)
+#' @param precision Volume precision settings (see format_volume_precise());
+#'   NULL = manual mode, 3 significant figures
 #' @return Structured result object with multiple steps
 plan_multistep_dilution <- function(stock_val, stock_unit,
                                     target_val, target_unit,
@@ -24,7 +26,10 @@ plan_multistep_dilution <- function(stock_val, stock_unit,
                                     solution_name = "",
                                     max_df_per_step = 500,
                                     min_pipette_vol_ul = 0.5,
-                                    preferred_intermediate_vol_ul = 500) {
+                                    preferred_intermediate_vol_ul = 500,
+                                    precision = NULL) {
+  if (is.null(precision)) precision <- default_precision()
+  pipette_mode <- is_pipette_mode(precision)
 
   # Normalize
 
@@ -100,9 +105,19 @@ plan_multistep_dilution <- function(stock_val, stock_unit,
       diluent_vol_L <- step_final_vol_L - stock_vol_L
     }
 
-    # Pipetting warnings
-    step_warnings <- pipetting_warnings(stock_vol_L)
-    if (stock_vol_L < min_pipette_vol_L) {
+    # Displayed (precision-rounded) volumes
+    stock_fv   <- format_volume_precise(stock_vol_L, precision, "stock")
+    diluent_fv <- format_volume_precise(diluent_vol_L, precision, "diluent")
+
+    # Pipetting warnings: pipette-range warnings in pipette mode
+    # (min pipetting volume then equals the smallest pipette's minimum),
+    # generic thresholds otherwise
+    if (pipette_mode) {
+      step_warnings <- unique(c(stock_fv$warning, diluent_fv$warning))
+    } else {
+      step_warnings <- pipetting_warnings(stock_vol_L)
+    }
+    if (!pipette_mode && stock_vol_L < min_pipette_vol_L) {
       step_warnings <- c(step_warnings,
         paste0("Transfer volume ", format_volume(stock_vol_L),
                " is below the minimum pipetting volume (",
@@ -127,6 +142,10 @@ plan_multistep_dilution <- function(stock_val, stock_unit,
       result_conc_internal = step_target_conc,
       stock_volume_L = stock_vol_L,
       diluent_volume_L = diluent_vol_L,
+      stock_volume_fmt = stock_fv$text,
+      diluent_volume_fmt = diluent_fv$text,
+      stock_pipette = stock_fv$pipette,
+      diluent_pipette = diluent_fv$pipette,
       total_volume_L = step_final_vol_L,
       dilution_factor = df_per_step
     )
@@ -134,38 +153,43 @@ plan_multistep_dilution <- function(stock_val, stock_unit,
     current_conc <- step_target_conc
   }
 
-  # Build instruction text
-  instruction_lines <- character(0)
+  # Build instruction text (plain and with pipette names)
   label <- if (nzchar(solution_name)) solution_name else "solution"
   target_conc_fmt <- format_conc_in_unit(target_norm$value, target_unit)
 
-  instruction_lines <- c(instruction_lines,
-    paste0(target_conc_fmt, " ", label, " in ", diluent),
-    paste0("Total DF: ", format_df(total_df), " in ", n_steps, " step(s)"),
-    ""
-  )
-
-  for (s in steps) {
-    stock_vol_fmt <- format_volume(s$stock_volume_L)
-    diluent_vol_fmt <- format_volume(s$diluent_volume_L)
-    step_conc_fmt <- format_concentration(s$result_conc_internal, conc_type)
-
-    instruction_lines <- c(instruction_lines,
-      paste0("Step ", s$step),
-      paste0("  ", stock_vol_fmt, " ", s$source_label, " + ",
-             diluent_vol_fmt, " ", diluent,
-             " | DF: ", format_df(s$dilution_factor)),
-      paste0("  \u2192 ", step_conc_fmt),
+  build_instruction <- function(show_pipettes) {
+    lines <- c(
+      paste0(target_conc_fmt, " ", label, " in ", diluent),
+      paste0("Total DF: ", format_df(total_df), " in ", n_steps, " step(s)"),
       ""
     )
+    for (s in steps) {
+      stock_fv   <- list(text = s$stock_volume_fmt, pipette = s$stock_pipette)
+      diluent_fv <- list(text = s$diluent_volume_fmt, pipette = s$diluent_pipette)
+      stock_vol_fmt   <- if (show_pipettes) volume_with_pipette(stock_fv) else stock_fv$text
+      diluent_vol_fmt <- if (show_pipettes) volume_with_pipette(diluent_fv) else diluent_fv$text
+      step_conc_fmt <- format_concentration(s$result_conc_internal, conc_type)
+
+      lines <- c(lines,
+        paste0("Step ", s$step),
+        paste0("  ", stock_vol_fmt, " ", s$source_label, " + ",
+               diluent_vol_fmt, " ", diluent,
+               " | DF: ", format_df(s$dilution_factor)),
+        paste0("  \u2192 ", step_conc_fmt),
+        ""
+      )
+    }
+    paste(lines, collapse = "\n")
   }
 
-  instruction_text <- paste(instruction_lines, collapse = "\n")
+  instruction_text <- build_instruction(FALSE)
+  instruction_text_pipettes <- build_instruction(TRUE)
 
   list(
     scenario_type = "multistep_dilution",
     solution_name = solution_name,
     instruction_text = instruction_text,
+    instruction_text_pipettes = instruction_text_pipettes,
     input_parameters = list(
       stock_concentration = stock_val,
       stock_unit = stock_unit,
@@ -176,7 +200,8 @@ plan_multistep_dilution <- function(stock_val, stock_unit,
       diluent = diluent,
       max_df_per_step = max_df_per_step,
       min_pipette_vol_ul = min_pipette_vol_ul,
-      preferred_intermediate_vol_ul = preferred_intermediate_vol_ul
+      preferred_intermediate_vol_ul = preferred_intermediate_vol_ul,
+      precision_mode = precision$mode
     ),
     normalized_parameters = list(
       stock_conc_internal = stock_norm$value,
@@ -191,6 +216,7 @@ plan_multistep_dilution <- function(stock_val, stock_unit,
       total_dilution_factor = total_df,
       n_steps = n_steps,
       df_per_step = df_per_step,
+      precision = precision_summary(precision),
       timestamp = Sys.time()
     )
   )

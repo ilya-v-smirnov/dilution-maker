@@ -59,7 +59,8 @@ multistep_dilution_ui <- function(id) {
                        value = 0.5, min = 0.1, max = 10, step = 0.1),
           numericInput(ns("intermediate_vol"), "Preferred intermediate volume (\u00b5l)",
                        value = 500, min = 50, max = 50000, step = 50)
-        )
+        ),
+        volume_precision_ui(ns)
       ),
       column(8,
         wellPanel(
@@ -84,8 +85,27 @@ multistep_dilution_ui <- function(id) {
   )
 }
 
-multistep_dilution_server <- function(id, memory, stocks_db) {
+multistep_dilution_server <- function(id, memory, stocks_db, pipettes_db) {
   moduleServer(id, function(input, output, session) {
+
+    # --- Volume precision settings (shared panel) ---
+    precision <- volume_precision_server(input, output, pipettes_db)
+
+    # In pipette mode the minimum pipetting volume is taken from the
+    # smallest enabled pipette and the field is locked
+    observe({
+      p <- precision()
+      current <- input$min_pipette   # also re-syncs after Clear resets the field
+      if (is_pipette_mode(p) && nrow(p$pipettes) > 0) {
+        smallest <- min(p$pipettes$min_volume)
+        if (!isTRUE(all.equal(current, smallest))) {
+          updateNumericInput(session, "min_pipette", value = smallest)
+        }
+        shinyjs::disable("min_pipette")
+      } else {
+        shinyjs::enable("min_pipette")
+      }
+    })
 
     # --- Populate substance dropdown ---
     observe({
@@ -165,6 +185,13 @@ multistep_dilution_server <- function(id, memory, stocks_db) {
       list(ok = length(errors) == 0, errors = errors, warnings = val$warnings)
     })
 
+    # Pipette mode: smallest enabled pipette's minimum; otherwise the field
+    effective_min_pipette <- reactive({
+      p <- precision()
+      if (is_pipette_mode(p) && nrow(p$pipettes) > 0) min(p$pipettes$min_volume)
+      else input$min_pipette
+    })
+
     result <- reactive({
       val <- validation()
       req(val$ok)
@@ -183,14 +210,15 @@ multistep_dilution_server <- function(id, memory, stocks_db) {
         diluent        = input$diluent,
         solution_name  = effective_solution_name(),
         max_df_per_step             = input$max_df,
-        min_pipette_vol_ul          = input$min_pipette,
-        preferred_intermediate_vol_ul = input$intermediate_vol
+        min_pipette_vol_ul          = effective_min_pipette(),
+        preferred_intermediate_vol_ul = input$intermediate_vol,
+        precision      = precision()
       )
     })
 
     output$instruction_text <- renderText({
       req(result())
-      result()$instruction_text
+      recipe_text(result(), precision()$show_pipettes)
     })
 
     # Show why nothing is calculated (e.g. stock below target, incompatible units)
@@ -217,13 +245,17 @@ multistep_dilution_server <- function(id, memory, stocks_db) {
       req(result())
       steps <- result()$steps
       conc_type <- result()$normalized_parameters$conc_type
+      show_pip <- isTRUE(precision()$show_pipettes)
+      vol_txt <- function(text, pipette) {
+        if (show_pip) volume_with_pipette(list(text = text, pipette = pipette)) else text
+      }
 
       do.call(rbind, lapply(steps, function(s) {
         data.frame(
           Step = s$step,
           Source = s$source_label,
-          `Take` = format_volume(s$stock_volume_L),
-          `Add Diluent` = format_volume(s$diluent_volume_L),
+          `Take` = vol_txt(s$stock_volume_fmt, s$stock_pipette),
+          `Add Diluent` = vol_txt(s$diluent_volume_fmt, s$diluent_pipette),
           `Step DF` = format_df(s$dilution_factor),
           `Result Conc` = format_concentration(s$result_conc_internal, conc_type),
           stringsAsFactors = FALSE,
