@@ -3,7 +3,8 @@
 # Databases tab: left panel selector + add/remove forms,
 # right panel shows the currently selected database table.
 # Operates on four reactives: proteins_db, substances_db, stocks_db,
-# pipettes_db. Saves changes back to the corresponding xlsx files.
+# pipettes_db. Saves changes back to the corresponding xlsx files
+# (only the edited database file is rewritten).
 # ==============================================================================
 
 # Database selector groups: group title -> c(label = value).
@@ -502,8 +503,8 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
       db <- rebuild_mw_all(db)
 
       ok <- try({
-        if (info$type == "substances") save_substances_db(db, data_dir)
-        else save_proteins_db(db, data_dir)
+        if (info$type == "substances") save_substances_db(db, data_dir, sheets = info$sheet)
+        else save_proteins_db(db, data_dir, sheets = info$sheet)
       }, silent = TRUE)
       if (inherits(ok, "try-error")) {
         showNotification(paste("Could not save file:", attr(ok, "condition")$message),
@@ -589,8 +590,8 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
       db <- rebuild_mw_all(db)
 
       ok <- try({
-        if (info$type == "substances") save_substances_db(db, data_dir)
-        else save_proteins_db(db, data_dir)
+        if (info$type == "substances") save_substances_db(db, data_dir, sheets = info$sheet)
+        else save_proteins_db(db, data_dir, sheets = info$sheet)
       }, silent = TRUE)
       if (inherits(ok, "try-error")) {
         showNotification(paste("Could not save file:", attr(ok, "condition")$message),

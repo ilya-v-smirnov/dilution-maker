@@ -32,17 +32,16 @@ test_that("custom substances round-trip with supplier, purity and cat#", {
   expect_equal(nrow(re$all), nrow(re[["Common substances"]]) + 2)
 })
 
-test_that("an older substances file without the new columns still loads", {
+test_that("a custom substances file without the new columns still loads", {
   d <- local_data_dir()
-  openxlsx::write.xlsx(list(
-    `Common substances` = data.frame(substance = "NaCl", MW = 58.44),
-    `Custom substances` = data.frame(substance = "EDTA Na2", MW = 372.24)),
-    file.path(d, "molecular_weights_substances.xlsx"))
+  write_db_sheet(data.frame(substance = "EDTA Na2", MW = 372.24),
+                 db_file_path(d, "custom_substances"), "Custom substances")
   db <- load_substances_db(d)
   cs <- db[["Custom substances"]]
   expect_equal(cs$supplier, "")
   expect_true(is.na(cs$purity))
   expect_equal(sheet_labels(cs), "EDTA Na2")
+  expect_equal(lookup_mw("NaCl", db, "Common substances"), 58.44)   # common file missing -> built-in
 })
 
 test_that("substance labels skip empty parts", {

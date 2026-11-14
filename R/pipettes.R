@@ -1,6 +1,6 @@
 # ==============================================================================
 # pipettes.R
-# Pipette database (data/pipettes.xlsx) and pipette-based volume precision.
+# Pipette database (data/private/pipettes.xlsx) and pipette-based volume precision.
 #
 # Columns: group, name, min_volume, max_volume, increment (all volumes in µl),
 # enabled. Pipettes belong to named groups (e.g. "Tissue culture",
@@ -85,7 +85,7 @@ clean_pipettes_df <- function(df) {
 #' creation order (also keeps empty groups).
 #' @return list(data, groups, sheet_name)
 load_pipettes_db <- function(data_dir = "data") {
-  xlsx_path <- file.path(data_dir, "pipettes.xlsx")
+  xlsx_path <- db_file_path(data_dir, "pipettes")
   df <- NULL
   groups <- character(0)
   if (file.exists(xlsx_path) && requireNamespace("readxl", quietly = TRUE)) {
@@ -109,18 +109,19 @@ load_pipettes_db <- function(data_dir = "data") {
   list(data = sort_pipettes(df, groups), groups = groups, sheet_name = "Pipettes")
 }
 
-#' Save the pipette database (sorted) to data/pipettes.xlsx
+#' Save the pipette database (sorted) to data/private/pipettes.xlsx
 save_pipettes_db <- function(pipettes_db, data_dir = "data") {
   if (!requireNamespace("openxlsx", quietly = TRUE)) {
     stop("Package 'openxlsx' is required to save the pipettes database.")
   }
-  if (!dir.exists(data_dir)) dir.create(data_dir, recursive = TRUE)
+  path <- db_file_path(data_dir, "pipettes")
+  if (!dir.exists(dirname(path))) dir.create(dirname(path), recursive = TRUE)
   groups <- pipettes_db$groups %||% unique(pipettes_db$data$group)
   df <- sort_pipettes(pipettes_db$data, groups)
   openxlsx::write.xlsx(
     list(Pipettes = df,
          Groups   = data.frame(group = groups, stringsAsFactors = FALSE)),
-    file.path(data_dir, "pipettes.xlsx"), overwrite = TRUE)
+    path, overwrite = TRUE)
 }
 
 #' All pipettes of one group (sorted)

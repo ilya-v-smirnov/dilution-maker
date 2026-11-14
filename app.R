@@ -11,6 +11,9 @@ for (f in list.files("R", pattern = "\\.R$", full.names = TRUE)) {
   source(f, local = TRUE)
 }
 
+# Create missing database files (first run, or private files not in git)
+init_data_files("data")
+
 # ==============================================================================
 # UI
 # ==============================================================================

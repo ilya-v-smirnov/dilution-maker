@@ -1,13 +1,43 @@
 # ==============================================================================
 # mw_database.R
-# Three databases:
-#   molecular_weights_substances.xlsx -> Dry Substance tab        (MW)
-#   molecular_weights_proteins.xlsx   -> MW-Based Preparation tab (MW)
-#   available_stocks.xlsx             -> shared across tabs       (stocks)
+# Databases and their files (paths relative to the data folder):
+#   common_substances.xlsx           Common substances  -> Dry Substance tab
+#   common_proteins.xlsx             Common proteins    -> MW-Based tab
+#   private/custom_substances.xlsx   Custom substances  -> Dry Substance tab
+#   private/custom_proteins.xlsx     Custom proteins    -> MW-Based tab
+#   private/available_stocks.xlsx    Available stocks   -> all dilution tabs
+#   private/pipettes.xlsx            Pipettes           -> volume precision
+# Common databases ship with the app; everything in private/ is the user's own
+# data and is excluded from git. Missing files are created at start-up
+# (see init_data_files()).
 # ==============================================================================
 
 # Small helper used across UI modules
 `%||%` <- function(a, b) if (is.null(a)) b else a
+
+# Sub-folder (inside the data folder) for user-specific databases
+PRIVATE_DATA_DIR <- "private"
+
+# Database key -> file path relative to the data folder
+DB_FILES <- c(
+  common_substances = "common_substances.xlsx",
+  common_proteins   = "common_proteins.xlsx",
+  custom_substances = file.path(PRIVATE_DATA_DIR, "custom_substances.xlsx"),
+  custom_proteins   = file.path(PRIVATE_DATA_DIR, "custom_proteins.xlsx"),
+  stocks            = file.path(PRIVATE_DATA_DIR, "available_stocks.xlsx"),
+  pipettes          = file.path(PRIVATE_DATA_DIR, "pipettes.xlsx")
+)
+
+#' Full path of a database file
+db_file_path <- function(data_dir, key) file.path(data_dir, DB_FILES[[key]])
+
+# MW database sheet -> database key
+MW_SHEET_KEYS <- c(
+  `Common substances` = "common_substances",
+  `Custom substances` = "custom_substances",
+  `Common proteins`   = "common_proteins",
+  `Custom proteins`   = "custom_proteins"
+)
 
 # --- Built-in fallbacks ------------------------------------------------------
 
@@ -81,34 +111,37 @@ get_builtin_proteins <- function() {
 
 # --- Generic MW loader -------------------------------------------------------
 
-load_mw_file <- function(xlsx_path, builtin_fallback) {
+#' Load an MW database (several sheets, one file per sheet) and fall back
+#' to the built-in content for any missing or unreadable file.
+load_mw_db <- function(data_dir, builtin_fallback) {
   builtin <- builtin_fallback()
   sheet_names <- names(builtin)
   sheets <- builtin
 
-  if (file.exists(xlsx_path)) {
-    tryCatch({
-      if (requireNamespace("readxl", quietly = TRUE)) {
-        available <- readxl::excel_sheets(xlsx_path)
-        for (sn in sheet_names) {
-          if (sn %in% available) {
-            df <- readxl::read_excel(xlsx_path, sheet = sn)
-            df <- as.data.frame(df, stringsAsFactors = FALSE)
-            if (all(c("substance", "MW") %in% names(df))) {
-              df <- df[!is.na(df$substance) & nzchar(trimws(as.character(df$substance))), , drop = FALSE]
-              df <- conform_to_template(df, builtin[[sn]])
-              sheets[[sn]] <- sort_mw_sheet(df)
-            }
-          }
-        }
-      }
-    }, error = function(e) {
-      message("Could not read MW file ", xlsx_path, ": ", e$message)
-    })
+  for (sn in sheet_names) {
+    path <- db_file_path(data_dir, MW_SHEET_KEYS[[sn]])
+    df <- read_mw_sheet(path, sn)
+    if (!is.null(df)) sheets[[sn]] <- sort_mw_sheet(conform_to_template(df, builtin[[sn]]))
   }
 
   sheets$sheet_names <- sheet_names
   rebuild_mw_all(sheets)
+}
+
+#' Read one MW sheet from its file (sheet named `sheet`, else the first one).
+#' @return data.frame, or NULL when the file is missing or unreadable.
+read_mw_sheet <- function(path, sheet) {
+  if (!file.exists(path) || !requireNamespace("readxl", quietly = TRUE)) return(NULL)
+  tryCatch({
+    available <- readxl::excel_sheets(path)
+    df <- readxl::read_excel(path, sheet = if (sheet %in% available) sheet else 1)
+    df <- as.data.frame(df, stringsAsFactors = FALSE)
+    if (!all(c("substance", "MW") %in% names(df))) return(NULL)
+    df[!is.na(df$substance) & nzchar(trimws(as.character(df$substance))), , drop = FALSE]
+  }, error = function(e) {
+    message("Could not read MW file ", path, ": ", e$message)
+    NULL
+  })
 }
 
 #' Coerce a loaded sheet to the template's columns and types. Columns
@@ -157,41 +190,40 @@ rebuild_mw_all <- function(db) {
 }
 
 load_substances_db <- function(data_dir = "data") {
-  load_mw_file(
-    file.path(data_dir, "molecular_weights_substances.xlsx"),
-    get_builtin_substances
-  )
+  load_mw_db(data_dir, get_builtin_substances)
 }
 
 load_proteins_db <- function(data_dir = "data") {
-  load_mw_file(
-    file.path(data_dir, "molecular_weights_proteins.xlsx"),
-    get_builtin_proteins
-  )
+  load_mw_db(data_dir, get_builtin_proteins)
 }
 
 # --- Generic MW saver --------------------------------------------------------
 
-#' Save an MW database (with multiple sheets) to xlsx, sorted alphabetically.
-save_mw_db_to_file <- function(db, xlsx_path) {
+#' Write a data frame to a single-sheet xlsx file (creating folders).
+write_db_sheet <- function(df, path, sheet) {
   if (!requireNamespace("openxlsx", quietly = TRUE)) {
-    stop("Package 'openxlsx' is required to save MW databases.")
+    stop("Package 'openxlsx' is required to save databases.")
   }
-  data_dir <- dirname(xlsx_path)
-  if (!dir.exists(data_dir)) dir.create(data_dir, recursive = TRUE)
-
-  sheet_data <- lapply(db$sheet_names, function(sn) sort_mw_sheet(db[[sn]]))
-  names(sheet_data) <- db$sheet_names
-
-  openxlsx::write.xlsx(sheet_data, xlsx_path, overwrite = TRUE)
+  if (!dir.exists(dirname(path))) dir.create(dirname(path), recursive = TRUE)
+  openxlsx::write.xlsx(stats::setNames(list(df), sheet), path, overwrite = TRUE)
 }
 
-save_substances_db <- function(db, data_dir = "data") {
-  save_mw_db_to_file(db, file.path(data_dir, "molecular_weights_substances.xlsx"))
+#' Save sheets of an MW database, each to its own file, sorted alphabetically.
+#' Only the given sheets are written, so editing Custom entries never
+#' rewrites the Common file.
+save_mw_db <- function(db, data_dir, sheets = db$sheet_names) {
+  for (sn in intersect(sheets, db$sheet_names)) {
+    write_db_sheet(sort_mw_sheet(db[[sn]]), db_file_path(data_dir, MW_SHEET_KEYS[[sn]]), sn)
+  }
+  invisible(TRUE)
 }
 
-save_proteins_db <- function(db, data_dir = "data") {
-  save_mw_db_to_file(db, file.path(data_dir, "molecular_weights_proteins.xlsx"))
+save_substances_db <- function(db, data_dir = "data", sheets = db$sheet_names) {
+  save_mw_db(db, data_dir, sheets)
+}
+
+save_proteins_db <- function(db, data_dir = "data", sheets = db$sheet_names) {
+  save_mw_db(db, data_dir, sheets)
 }
 
 # --- MW lookup helpers -------------------------------------------------------
@@ -300,7 +332,7 @@ empty_stocks_df <- function() {
 #' Load the available stocks database from xlsx.
 #' @return list with $data (data.frame) and $sheet_name
 load_stocks_db <- function(data_dir = "data") {
-  xlsx_path <- file.path(data_dir, "available_stocks.xlsx")
+  xlsx_path <- db_file_path(data_dir, "stocks")
   df <- empty_stocks_df()
 
   if (file.exists(xlsx_path)) {
@@ -338,17 +370,10 @@ load_stocks_db <- function(data_dir = "data") {
 
 #' Save the stocks database back to xlsx (sorted by substance, then date).
 save_stocks_db <- function(stocks_db, data_dir = "data") {
-  if (!requireNamespace("openxlsx", quietly = TRUE)) {
-    stop("Package 'openxlsx' is required to save the stocks database.")
-  }
-  if (!dir.exists(data_dir)) dir.create(data_dir, recursive = TRUE)
-
   df <- stocks_db$data
   if (is.null(df)) df <- empty_stocks_df()
   if (nrow(df) > 0) df <- df[order(tolower(df$substance), df$date), , drop = FALSE]
-
-  xlsx_path <- file.path(data_dir, "available_stocks.xlsx")
-  openxlsx::write.xlsx(list(`Available stocks` = df), xlsx_path, overwrite = TRUE)
+  write_db_sheet(df, db_file_path(data_dir, "stocks"), "Available stocks")
 }
 
 # --- Stocks helpers ----------------------------------------------------------
@@ -398,4 +423,40 @@ augment_name_with_stock <- function(base_name, stock_row) {
   suffix <- stock_variant_label(stock_row$date, stock_row$comments)
   if (!nzchar(suffix)) return(base_name)
   paste0(base_name, "\t\t\t(", suffix, ")")
+}
+
+# ==============================================================================
+# Start-up: create missing database files
+# ==============================================================================
+
+#' Create any missing database file: Common databases and pipettes from the
+#' built-in content, Custom databases and stocks empty (headers only).
+#' Existing files are never modified.
+#' @return character vector of created file paths (invisibly)
+init_data_files <- function(data_dir = "data") {
+  created <- character(0)
+  missing <- function(key) !file.exists(db_file_path(data_dir, key))
+  mw_builtin <- c(get_builtin_substances(), get_builtin_proteins())
+
+  for (sn in names(MW_SHEET_KEYS)) {
+    key <- MW_SHEET_KEYS[[sn]]
+    if (missing(key)) {
+      write_db_sheet(mw_builtin[[sn]], db_file_path(data_dir, key), sn)
+      created <- c(created, db_file_path(data_dir, key))
+    }
+  }
+  if (missing("stocks")) {
+    save_stocks_db(list(data = empty_stocks_df()), data_dir)
+    created <- c(created, db_file_path(data_dir, "stocks"))
+  }
+  if (missing("pipettes")) {
+    builtin <- get_builtin_pipettes()
+    save_pipettes_db(list(data = builtin, groups = unique(builtin$group)), data_dir)
+    created <- c(created, db_file_path(data_dir, "pipettes"))
+  }
+
+  if (length(created) > 0) {
+    message("Created database file(s): ", paste(created, collapse = ", "))
+  }
+  invisible(created)
 }
