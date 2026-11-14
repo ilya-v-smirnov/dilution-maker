@@ -49,3 +49,6 @@ rsconnect/
 # User-specific databases (custom substances/proteins, stocks, pipettes).
 # Created empty on first start; never published.
 data/private/
+
+# Internal project notes (not published)
+Technical instructions/
