@@ -450,9 +450,14 @@ export_scenario_excel <- function(memory, scenario, filepath, show_pipettes = TR
       base$Diluent <- ip$diluent
       base$DF <- r$technical_metadata$dilution_factor
     } else if (scenario == "dry_substance") {
+      tm <- r$technical_metadata
       base$Substance <- ip$substance
+      base$Supplier <- ip$supplier %||% ""
+      base$Purity_pct <- ip$purity %||% NA_real_
+      base$Cat <- ip$cat %||% ""
       base$MW <- ip$mw
-      base$Mass_g <- r$technical_metadata$mass_g
+      base$Mass_g <- tm$mass_g
+      base$Mass_100pct_g <- tm$mass_pure_g %||% tm$mass_g
       base$Target <- paste(ip$target_concentration, ip$target_unit)
       base$Volume <- paste(ip$final_volume, ip$final_volume_unit)
       base$Solvent <- ip$solvent

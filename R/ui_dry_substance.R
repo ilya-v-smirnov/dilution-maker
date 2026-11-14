@@ -27,7 +27,9 @@ dry_substance_ui <- function(id) {
           conditionalPanel(
             condition = paste0("input['", ns("mw_source"), "'] == 'manual'"),
             textInput(ns("substance_manual"), "Substance name", placeholder = "e.g. NaCl"),
-            numericInput(ns("mw_manual"), "Molecular weight (Da)", value = NA, min = 0, step = 0.01)
+            numericInput(ns("mw_manual"), "Molecular weight (Da)", value = NA, min = 0, step = 0.01),
+            numericInput(ns("purity_manual"), "Purity, % (optional; empty = 100%)",
+                         value = NA, min = 0, max = 100, step = 0.1)
           ),
           uiOutput(ns("mw_display"))
         ),
@@ -84,7 +86,8 @@ dry_substance_server <- function(id, memory, mw_db) {
       db <- mw_db()
       src <- input$mw_source
       if (is.null(src) || src == "manual") return()
-      choices <- get_substance_names_from_sheet(db, src)
+      # Custom substances are listed as "substance supplier purity%"
+      choices <- get_substance_labels_from_sheet(db, src)
       # Keep the current substance if it is still listed (e.g. after a DB edit)
       current <- isolate(input$substance_db)
       selected <- if (!is.null(current) && current %in% choices) {
@@ -99,28 +102,47 @@ dry_substance_server <- function(id, memory, mw_db) {
 
     current_mw <- reactive({
       src <- input$mw_source
-      if (is.null(src)) return(list(substance = "", mw = NA, source = ""))
+      empty <- list(substance = "", label = "", mw = NA, source = "",
+                    supplier = "", purity = NA_real_, cat = "")
+      if (is.null(src)) return(empty)
 
       if (src == "manual") {
-        list(substance = input$substance_manual %||% "", mw = input$mw_manual, source = "manual")
+        name <- trimws(input$substance_manual %||% "")
+        purity <- input$purity_manual
+        if (is.null(purity)) purity <- NA_real_
+        list(substance = name,
+             label = if (nzchar(name)) substance_label(name, "", purity) else "",
+             mw = input$mw_manual, source = "manual",
+             supplier = "", purity = purity, cat = "")
       } else {
         req(input$substance_db)
         req(nzchar(input$substance_db))
-        db <- mw_db()
-        mw <- lookup_mw(input$substance_db, db, sheet = src)
-        list(substance = input$substance_db, mw = mw, source = src)
+        entry <- lookup_substance_entry(mw_db(), src, input$substance_db)
+        req(entry)
+        list(substance = entry$substance, label = entry$label, mw = entry$MW,
+             source = src, supplier = entry$supplier, purity = entry$purity,
+             cat = entry$cat)
       }
     })
 
     output$mw_display <- renderUI({
       info <- current_mw()
       if (is.null(info$mw) || is.na(info$mw)) {
-        tags$div(class = "alert alert-info", "Select a substance or enter MW manually.")
-      } else {
-        tags$div(class = "alert alert-success",
-          tags$strong(info$substance), ": MW = ", format(info$mw, big.mark = ","), " Da"
-        )
+        return(tags$div(class = "alert alert-info", "Select a substance or enter MW manually."))
       }
+      purity_err <- validate_purity(info$purity)
+      if (!is.null(purity_err)) {
+        return(tags$div(class = "alert alert-danger", purity_err))
+      }
+      extras <- c(
+        if (!is.na(info$purity)) paste0("Purity = ", format_purity(info$purity)),
+        if (nzchar(info$cat)) paste0("Cat# ", info$cat)
+      )
+      tags$div(class = "alert alert-success",
+        tags$strong(if (nzchar(info$label)) info$label else info$substance),
+        ": MW = ", format(info$mw, big.mark = ","), " Da",
+        if (length(extras) > 0) tagList(tags$br(), paste(extras, collapse = "; "))
+      )
     })
 
     result <- reactive({
@@ -129,6 +151,7 @@ dry_substance_server <- function(id, memory, mw_db) {
       req(!is.na(info$mw), info$mw > 0)
       req(input$target_val, input$final_vol)
       req(input$target_val > 0, input$final_vol > 0)
+      req(is.null(validate_purity(info$purity)))
 
       calculate_dry_substance(
         substance = info$substance,
@@ -137,7 +160,11 @@ dry_substance_server <- function(id, memory, mw_db) {
         target_unit = input$target_unit,
         final_vol = input$final_vol,
         final_vol_unit = input$final_vol_unit,
-        solvent = input$solvent
+        solvent = input$solvent,
+        purity = info$purity,
+        supplier = info$supplier,
+        cat = info$cat,
+        label = info$label
       )
     })
 
@@ -159,16 +186,24 @@ dry_substance_server <- function(id, memory, mw_db) {
     output$details_table <- renderTable({
       req(result())
       res <- result()
+      ip <- res$input_parameters
+      tm <- res$technical_metadata
+      dash <- function(x) if (is.null(x) || is.na(x) || !nzchar(x)) "\u2014" else x
       data.frame(
-        Parameter = c("Substance", "MW (Da)", "Required Mass",
-                       "Target Concentration", "Final Volume", "Solvent"),
+        Parameter = c("Substance", "Supplier", "Purity", "Cat#", "MW (Da)",
+                      "Required Mass", "Mass at 100% purity",
+                      "Target Concentration", "Final Volume", "Solvent"),
         Value = c(
-          res$input_parameters$substance,
-          format(res$technical_metadata$mw, big.mark = ","),
-          format_mass(res$technical_metadata$mass_g),
-          paste0(sig3(res$input_parameters$target_concentration), " ", res$input_parameters$target_unit),
+          ip$substance,
+          dash(ip$supplier),
+          if (is.na(ip$purity)) "100% (assumed)" else format_purity(ip$purity),
+          dash(ip$cat),
+          format(tm$mw, big.mark = ","),
+          format_mass(tm$mass_g),
+          format_mass(tm$mass_pure_g),
+          paste0(sig3(ip$target_concentration), " ", ip$target_unit),
           format_volume(res$normalized_parameters$final_vol_L),
-          res$input_parameters$solvent
+          ip$solvent
         ),
         stringsAsFactors = FALSE
       )
@@ -183,7 +218,7 @@ dry_substance_server <- function(id, memory, mw_db) {
     # Restore target/volume/solvent and manual inputs to their defaults;
     # the selected MW source and substance are kept
     observeEvent(input$clear_btn, {
-      for (id in c("target_panel", "substance_manual", "mw_manual")) {
+      for (id in c("target_panel", "substance_manual", "mw_manual", "purity_manual")) {
         shinyjs::reset(id)
       }
     })

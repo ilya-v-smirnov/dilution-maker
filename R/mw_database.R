@@ -34,9 +34,17 @@ get_builtin_substances <- function() {
       ),
       stringsAsFactors = FALSE
     ),
-    `Custom substances` = data.frame(
-      substance = character(0), MW = numeric(0), stringsAsFactors = FALSE
-    )
+    `Custom substances` = empty_custom_substances_df()
+  )
+}
+
+#' Empty Custom substances sheet. Custom substances carry optional
+#' supplier / purity (%) / catalogue number on top of substance + MW.
+empty_custom_substances_df <- function() {
+  data.frame(
+    substance = character(0), MW = numeric(0),
+    supplier  = character(0), purity = numeric(0), cat = character(0),
+    stringsAsFactors = FALSE
   )
 }
 
@@ -88,9 +96,8 @@ load_mw_file <- function(xlsx_path, builtin_fallback) {
             df <- as.data.frame(df, stringsAsFactors = FALSE)
             if (all(c("substance", "MW") %in% names(df))) {
               df <- df[!is.na(df$substance) & nzchar(trimws(as.character(df$substance))), , drop = FALSE]
-              df$substance <- as.character(df$substance)
-              df$MW <- as.numeric(df$MW)
-              sheets[[sn]] <- df[order(tolower(df$substance)), , drop = FALSE]
+              df <- conform_to_template(df, builtin[[sn]])
+              sheets[[sn]] <- sort_mw_sheet(df)
             }
           }
         }
@@ -100,9 +107,53 @@ load_mw_file <- function(xlsx_path, builtin_fallback) {
     })
   }
 
-  sheets$all <- do.call(rbind, sheets[sheet_names])
   sheets$sheet_names <- sheet_names
-  sheets
+  rebuild_mw_all(sheets)
+}
+
+#' Coerce a loaded sheet to the template's columns and types. Columns
+#' missing from the file (e.g. an older file without supplier/purity/cat)
+#' are added empty; extra columns are dropped.
+conform_to_template <- function(df, template) {
+  n <- nrow(df)
+  out <- lapply(names(template), function(col) {
+    proto <- template[[col]]
+    if (col %in% names(df)) {
+      x <- df[[col]]
+      if (is.numeric(proto)) {
+        x <- suppressWarnings(as.numeric(x))
+      } else {
+        x <- as.character(x)
+        x[is.na(x)] <- ""
+        x <- trimws(x)
+      }
+    } else {
+      x <- if (is.numeric(proto)) rep(NA_real_, n) else rep("", n)
+    }
+    x
+  })
+  names(out) <- names(template)
+  as.data.frame(out, stringsAsFactors = FALSE)
+}
+
+#' Alphabetical order by substance (then supplier, then purity when present).
+sort_mw_sheet <- function(df) {
+  if (nrow(df) == 0) return(df)
+  keys <- list(tolower(df$substance))
+  if ("supplier" %in% names(df)) keys <- c(keys, list(tolower(df$supplier)))
+  if ("purity" %in% names(df)) keys <- c(keys, list(df$purity))
+  df <- df[do.call(order, keys), , drop = FALSE]
+  rownames(df) <- NULL
+  df
+}
+
+#' Recompute db$all (substance + MW across all sheets). Sheets may have
+#' different columns, so only the shared ones are combined.
+rebuild_mw_all <- function(db) {
+  db$all <- do.call(rbind, lapply(db[db$sheet_names], function(df) {
+    df[, c("substance", "MW"), drop = FALSE]
+  }))
+  db
 }
 
 load_substances_db <- function(data_dir = "data") {
@@ -129,11 +180,7 @@ save_mw_db_to_file <- function(db, xlsx_path) {
   data_dir <- dirname(xlsx_path)
   if (!dir.exists(data_dir)) dir.create(data_dir, recursive = TRUE)
 
-  sheet_data <- lapply(db$sheet_names, function(sn) {
-    df <- db[[sn]]
-    if (nrow(df) > 0) df <- df[order(tolower(df$substance)), , drop = FALSE]
-    df
-  })
+  sheet_data <- lapply(db$sheet_names, function(sn) sort_mw_sheet(db[[sn]]))
   names(sheet_data) <- db$sheet_names
 
   openxlsx::write.xlsx(sheet_data, xlsx_path, overwrite = TRUE)
@@ -171,6 +218,67 @@ get_substance_names_from_sheet <- function(db, sheet) {
 
 get_substance_names <- function(db) {
   sort(db$all$substance)
+}
+
+# --- Substance display labels (supplier / purity) ----------------------------
+
+#' Purity as text: 97 -> "97%", 99.5 -> "99.5%"; "" when missing.
+format_purity <- function(purity) {
+  purity <- suppressWarnings(as.numeric(purity))
+  vapply(purity, function(p) {
+    if (is.na(p)) "" else paste0(trimws(format(p, scientific = FALSE, drop0trailing = TRUE)), "%")
+  }, character(1), USE.NAMES = FALSE)
+}
+
+#' Display label "substance supplier purity%", skipping empty parts,
+#' e.g. "EDTA Na2 Merck 97%", "EDTA Na2 97%", "EDTA Na2 Merck".
+substance_label <- function(substance, supplier = "", purity = NA_real_) {
+  supplier <- ifelse(is.na(supplier), "", trimws(as.character(supplier)))
+  pur <- format_purity(purity)
+  out <- trimws(as.character(substance))
+  out <- ifelse(nzchar(supplier), paste(out, supplier), out)
+  ifelse(nzchar(pur), paste(out, pur), out)
+}
+
+#' Labels for the rows of a sheet (just the substance name for sheets
+#' without supplier/purity columns).
+sheet_labels <- function(df) {
+  if (is.null(df) || nrow(df) == 0) return(character(0))
+  if (!all(c("supplier", "purity") %in% names(df))) return(df$substance)
+  substance_label(df$substance, df$supplier, df$purity)
+}
+
+#' Display labels for a sheet in display (alphabetical) order.
+get_substance_labels_from_sheet <- function(db, sheet) {
+  if (!sheet %in% db$sheet_names) return(character(0))
+  sheet_labels(sort_mw_sheet(db[[sheet]]))
+}
+
+#' Resolve a sheet row by its display label.
+#' @return list(substance, label, MW, supplier, purity, cat) or NULL.
+lookup_substance_entry <- function(db, sheet, label) {
+  if (is.null(label) || !sheet %in% db$sheet_names) return(NULL)
+  df <- db[[sheet]]
+  idx <- match(label, sheet_labels(df))
+  if (is.na(idx)) return(NULL)
+  row <- df[idx, , drop = FALSE]
+  list(
+    substance = row$substance,
+    label     = label,
+    MW        = row$MW,
+    supplier  = if ("supplier" %in% names(row)) row$supplier else "",
+    purity    = if ("purity" %in% names(row)) row$purity else NA_real_,
+    cat       = if ("cat" %in% names(row)) row$cat else ""
+  )
+}
+
+#' Validate an optional purity value (%): NULL when OK, else an error message.
+validate_purity <- function(purity) {
+  if (is.null(purity) || length(purity) == 0 || is.na(purity)) return(NULL)
+  if (!is.numeric(purity) || purity <= 0 || purity > 100) {
+    return("Purity must be greater than 0 and not more than 100 (%).")
+  }
+  NULL
 }
 
 # ==============================================================================

@@ -153,46 +153,74 @@ calculate_mw_based_preparation <- function(substance, mw, mw_source,
 
 #' Calculate mass needed to prepare solution from dry substance
 #'
-#' @param substance Substance name
+#' The weighed mass is corrected for purity: mass = mass_at_100% / (purity/100).
+#' A missing purity (NA) is treated as 100%.
+#'
+#' @param substance Substance name (used in the instruction header)
 #' @param mw Molecular weight (Da)
 #' @param target_val Target concentration value
 #' @param target_unit Target concentration unit
 #' @param final_vol Final volume value
 #' @param final_vol_unit Final volume unit
 #' @param solvent Solvent name
+#' @param purity Purity in percent (0 < purity <= 100), NA = 100%
+#' @param supplier Supplier name (optional)
+#' @param cat Catalogue number (optional)
+#' @param label Full display label used in the "Weigh" line
+#'   (defaults to substance + supplier + purity)
 #' @return Structured result object
 calculate_dry_substance <- function(substance, mw,
                                     target_val, target_unit,
                                     final_vol, final_vol_unit,
-                                    solvent = "Water") {
+                                    solvent = "Water",
+                                    purity = NA_real_,
+                                    supplier = "",
+                                    cat = "",
+                                    label = NULL) {
+
+  purity <- if (is.null(purity) || length(purity) == 0) NA_real_ else as.numeric(purity)
+  supplier <- if (is.null(supplier) || is.na(supplier)) "" else trimws(supplier)
+  cat <- if (is.null(cat) || is.na(cat)) "" else trimws(cat)
+  purity_err <- validate_purity(purity)
+  if (!is.null(purity_err)) stop(purity_err)
+  purity_used <- if (is.na(purity)) 100 else purity
 
   target_type <- get_conc_type(target_unit)
   vol_L <- volume_to_L(final_vol, final_vol_unit)
 
-  # Calculate required mass in grams
+  # Mass of pure (100%) substance in grams
   if (target_type == "molar") {
     # mol/L * L * g/mol = g
     molL <- molar_conc_to_molL(target_val, target_unit)
-    mass_g <- molL * vol_L * mw
+    mass_pure_g <- molL * vol_L * mw
     target_internal <- molL
   } else if (target_type == "mass") {
     # g/L * L = g
     gL <- mass_conc_to_gL(target_val, target_unit)
-    mass_g <- gL * vol_L
+    mass_pure_g <- gL * vol_L
     target_internal <- gL
   } else {
     stop("Unsupported concentration type for dry substance preparation")
   }
 
+  # Purity correction: weigh more of the impure powder
+  mass_g <- mass_pure_g / (purity_used / 100)
+
   # Format instruction
   mass_fmt <- format_mass(mass_g)
   vol_fmt <- format_volume(vol_L)
   target_fmt <- paste0(sig3(target_val), " ", target_unit)
-  label <- if (nzchar(substance)) substance else "substance"
+  short_name <- if (nzchar(substance)) substance else "substance"
+  if (is.null(label) || !nzchar(label)) {
+    label <- if (nzchar(substance)) substance_label(substance, supplier, purity) else "substance"
+  }
+  purity_note <- if (purity_used < 100) {
+    paste0(" (purity-corrected; ", format_mass(mass_pure_g), " at 100%)")
+  } else ""
 
   instruction <- paste0(
-    target_fmt, " ", label, " in ", solvent, "\n",
-    "Weigh ", mass_fmt, " ", label, "\n",
+    target_fmt, " ", short_name, " in ", solvent, "\n",
+    "Weigh ", mass_fmt, " ", label, purity_note, "\n",
     "Dissolve in ", vol_fmt, " ", solvent
   )
 
@@ -211,6 +239,10 @@ calculate_dry_substance <- function(substance, mw,
     instruction_text = instruction,
     input_parameters = list(
       substance = substance,
+      substance_label = label,
+      supplier = supplier,
+      purity = purity,
+      cat = cat,
       mw = mw,
       target_concentration = target_val,
       target_unit = target_unit,
@@ -222,7 +254,8 @@ calculate_dry_substance <- function(substance, mw,
       target_conc_internal = target_internal,
       conc_type = target_type,
       final_vol_L = vol_L,
-      mass_g = mass_g
+      mass_g = mass_g,
+      mass_pure_g = mass_pure_g
     ),
     steps = list(
       list(
@@ -237,6 +270,8 @@ calculate_dry_substance <- function(substance, mw,
     technical_metadata = list(
       mw = mw,
       mass_g = mass_g,
+      mass_pure_g = mass_pure_g,
+      purity_used = purity_used,
       timestamp = Sys.time()
     )
   )

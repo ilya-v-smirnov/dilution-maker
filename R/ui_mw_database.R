@@ -64,6 +64,7 @@ mw_database_ui <- function(id) {
   is_pipettes_js   <- paste0(sel_js, " == 'pipettes'")
   not_pipettes_js  <- paste0(sel_js, " != 'pipettes'")
   is_mw_js         <- paste0(sel_js, " != 'stocks' && ", sel_js, " != 'pipettes'")
+  is_subst_custom_js <- paste0(sel_js, " == 'subst_custom'")
 
   fluidRow(
     # ----- Left panel: navigation + add/remove -------------------------------
@@ -118,6 +119,20 @@ mw_database_ui <- function(id) {
           condition = is_mw_js,
           numericInput(ns("new_mw"), "Molecular weight (Da)",
                        value = NA_real_, min = 0, step = 0.01)
+        ),
+
+        # Optional supplier / purity / catalogue number (Custom substances)
+        conditionalPanel(
+          condition = is_subst_custom_js,
+          textInput(ns("new_supplier"), "Supplier (optional)", placeholder = "e.g. Merck"),
+          fluidRow(
+            column(6, numericInput(ns("new_purity"), "Purity, % (optional)",
+                                   value = NA_real_, min = 0, max = 100, step = 0.1)),
+            column(6, textInput(ns("new_cat"), "Cat# (optional)",
+                                placeholder = "e.g. E5134"))
+          ),
+          tags$small(class = "text-muted d-block mb-2",
+            "Empty purity is treated as 100%. The mass to weigh is corrected for purity.")
         ),
 
         # Stock-specific fields
@@ -255,6 +270,11 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
         return(out)
       }
       if ("MW" %in% names(out)) out$MW <- format(out$MW, big.mark = ",")
+      if ("purity" %in% names(out)) {
+        out$purity <- sub("%$", "", format_purity(out$purity))
+        names(out)[names(out) == "purity"] <- "purity, %"
+        names(out)[names(out) == "cat"] <- "cat#"
+      }
       if ("conc" %in% names(out)) out$conc <- format(out$conc)
       out
     }, striped = TRUE, hover = TRUE, width = "100%")
@@ -272,8 +292,15 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
                           choices = character(0), selected = character(0))
         return()
       }
-      # Pipettes keep their volume order; other databases are alphabetical
-      substances <- if (is_pip) df$name else sort(unique(df$substance))
+      # Pipettes keep their volume order; Custom substances are listed by their
+      # full label; other databases are alphabetical
+      substances <- if (is_pip) {
+        df$name
+      } else if ("purity" %in% names(df)) {
+        sheet_labels(sort_mw_sheet(df))
+      } else {
+        sort(unique(df$substance))
+      }
       updateSelectInput(session, "remove_substance",
                         choices = substances,
                         selected = if (length(substances) > 0) substances[1] else character(0))
@@ -428,24 +455,51 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
 
       db <- if (info$type == "substances") substances_db() else proteins_db()
       df <- db[[info$sheet]]
-      if (nrow(df) > 0) {
-        dup <- which(tolower(df$substance) == tolower(name))
-        if (length(dup) > 0) {
+      has_extras <- "purity" %in% names(df)
+
+      if (has_extras) {
+        # ---- Custom substances: substance + supplier + purity identify an entry
+        supplier_val <- trimws(input$new_supplier %||% "")
+        cat_val <- trimws(input$new_cat %||% "")
+        purity_val <- input$new_purity
+        if (is.null(purity_val)) purity_val <- NA_real_
+        purity_err <- validate_purity(purity_val)
+        if (!is.null(purity_err)) {
+          showNotification(purity_err, type = "error", duration = 4)
+          return()
+        }
+        new_label <- substance_label(name, supplier_val, purity_val)
+        if (tolower(new_label) %in% tolower(sheet_labels(df))) {
           showNotification(
-            paste0("'", name, "' already exists in ", info$sheet,
+            paste0("'", new_label, "' already exists in ", info$sheet,
                    ". Remove the existing entry first."),
             type = "error", duration = 5
           )
           return()
         }
+        new_row <- data.frame(substance = name, MW = as.numeric(mw_val),
+                              supplier = supplier_val, purity = as.numeric(purity_val),
+                              cat = cat_val, stringsAsFactors = FALSE)
+      } else {
+        if (nrow(df) > 0) {
+          dup <- which(tolower(df$substance) == tolower(name))
+          if (length(dup) > 0) {
+            showNotification(
+              paste0("'", name, "' already exists in ", info$sheet,
+                     ". Remove the existing entry first."),
+              type = "error", duration = 5
+            )
+            return()
+          }
+        }
+        new_label <- name
+        new_row <- data.frame(substance = name, MW = as.numeric(mw_val),
+                              stringsAsFactors = FALSE)
       }
 
-      new_row <- data.frame(substance = name, MW = as.numeric(mw_val),
-                            stringsAsFactors = FALSE)
-      df <- rbind(df, new_row)
-      df <- df[order(tolower(df$substance)), , drop = FALSE]
+      df <- sort_mw_sheet(rbind(df, new_row))
       db[[info$sheet]] <- df
-      db$all <- do.call(rbind, db[db$sheet_names])
+      db <- rebuild_mw_all(db)
 
       ok <- try({
         if (info$type == "substances") save_substances_db(db, data_dir)
@@ -461,8 +515,13 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
 
       updateTextInput(session, "new_substance", value = "")
       updateNumericInput(session, "new_mw", value = NA_real_)
+      if (has_extras) {
+        updateTextInput(session, "new_supplier", value = "")
+        updateTextInput(session, "new_cat", value = "")
+        updateNumericInput(session, "new_purity", value = NA_real_)
+      }
 
-      showNotification(paste0("Added '", name, "' to ", info$sheet, "."),
+      showNotification(paste0("Added '", new_label, "' to ", info$sheet, "."),
                        type = "message", duration = 2)
     })
 
@@ -519,14 +578,15 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
 
       db <- if (info$type == "substances") substances_db() else proteins_db()
       df <- db[[info$sheet]]
-      idx <- which(df$substance == target)
+      # Custom substances are selected by their full label
+      idx <- which(sheet_labels(df) == target)
       if (length(idx) == 0) {
         showNotification("Entry not found.", type = "error", duration = 3)
         return()
       }
       df <- df[-idx[1], , drop = FALSE]
       db[[info$sheet]] <- df
-      db$all <- do.call(rbind, db[db$sheet_names])
+      db <- rebuild_mw_all(db)
 
       ok <- try({
         if (info$type == "substances") save_substances_db(db, data_dir)
