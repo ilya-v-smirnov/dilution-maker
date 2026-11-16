@@ -159,12 +159,14 @@ n = ⌈log(DF<sub>total</sub>) / log(DF<sub>max</sub>)⌉, and every step uses
 the same factor DF<sub>total</sub><sup>1/n</sup>. If any transfer would be
 below the minimum pipetting volume, a step is added (up to 10 steps).
 Intermediates have the preferred volume (default 500 µl) unless the next step
-needs more; then the volume is increased to the required amount + 10%,
+needs more than it can supply with a 10% reserve; then the volume is
+increased to the required amount + 10%,
 rounded up to 2 significant figures. In pipette-based mode the minimum
 pipetting volume equals the minimum of the smallest enabled pipette.
 
-**Rounding.** Displayed values have 3 significant figures without trailing
-zeros (`58.8 µl`, `0.99 ml`, `170x`). Display units are chosen automatically
+**Rounding.** Calculated values are displayed with 3 significant figures
+without trailing zeros (`58.8 µl`, `0.99 ml`, `170x`); values you enter (target and stock
+concentration, MW) are shown as entered. Display units are chosen automatically
 (volumes below 100 µl in µl, below 1 L in ml).
 
 **Pipette selection** (pipette-based precision), for a volume V:
@@ -267,7 +269,7 @@ technical metadata), which is used for display, memory, and export.
 
 ## Tests
 
-The `tests/testthat` suite (300 checks) covers unit conversion, formatting,
+The `tests/testthat` suite (386 checks) covers unit conversion, formatting,
 all calculation scenarios with hand-calculated reference values, pipette
 selection, saved recipes, database files, Word/Excel export, and every tab
 through `shiny::testServer`. Tests run in temporary folders and never modify

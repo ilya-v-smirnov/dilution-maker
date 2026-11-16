@@ -74,9 +74,12 @@ clean_pipettes_df <- function(df) {
   if (!is.logical(en)) en <- toupper(trimws(as.character(en))) %in% c("TRUE", "T", "1", "YES")
   en[is.na(en)] <- TRUE
   df$enabled <- en
+  # A range must be positive and non-empty (same rules as the Add Entry form)
   ok <- !is.na(df$name) & nzchar(df$name) &
         is.finite(df$min_volume) & is.finite(df$max_volume) &
-        is.finite(df$increment) & df$increment > 0
+        is.finite(df$increment) & df$increment > 0 &
+        df$min_volume > 0 & df$max_volume > df$min_volume
+  ok[is.na(ok)] <- FALSE
   df[ok, PIPETTE_COLUMNS, drop = FALSE]
 }
 
@@ -146,8 +149,6 @@ pipette_label <- function(name, min_volume, max_volume, increment) {
          " \u00b5l, step ", num_plain(increment), " \u00b5l)")
 }
 
-num_plain <- function(x) trimws(format(x, scientific = FALSE, drop0trailing = TRUE))
-
 # --- Selection ---------------------------------------------------------------
 
 #' Select a pipette for a volume (µl) among the given (enabled) pipettes
@@ -197,10 +198,20 @@ format_volume_increment <- function(value_L, increment_ul) {
   unit <- best_volume_unit(rounded_L)
   shown <- L_to_volume(rounded_L, unit)
   inc_in_unit <- L_to_volume(volume_to_L(increment_ul, "\u00b5l"), unit)
-  digits <- max(0, ceiling(-log10(inc_in_unit) - 1e-9))
+  digits <- decimals_needed(inc_in_unit)
   txt <- formatC(shown, format = "f", digits = digits)
   if (digits > 0) txt <- sub("\\.?0+$", "", txt)
   paste0(txt, " ", unit)
+}
+
+#' Decimal places needed to write `x` exactly (0.02 -> 2, 0.25 -> 2, 2.5 -> 1,
+#' 20 -> 0). Counting only the order of magnitude would truncate increments
+#' such as 0.25 or 2.5 and display a volume the pipette cannot be set to.
+decimals_needed <- function(x, max_digits = 9) {
+  for (d in 0:max_digits) {
+    if (abs(round(x, d) - x) <= 1e-9 * abs(x)) return(d)
+  }
+  max_digits
 }
 
 #' Default precision settings (manual mode, 3 significant figures)

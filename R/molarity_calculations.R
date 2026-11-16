@@ -76,6 +76,9 @@ calculate_mw_based_preparation <- function(substance, mw, mw_source,
 
   stock_type <- get_conc_type(stock_unit)
   target_type <- get_conc_type(target_unit)
+  for (u in c(stock_unit, target_unit)) {
+    if (get_conc_type(u) == "unknown") stop(paste0("Unknown concentration unit: '", u, "'."))
+  }
 
   # Convert stock to same type as target for dilution calc
   if (stock_type != target_type) {
@@ -106,14 +109,16 @@ calculate_mw_based_preparation <- function(substance, mw, mw_source,
 
   # Rebuild instruction text with structured format (plain and with pipettes)
   s <- result$steps[[1]]
-  target_conc_fmt <- format_conc_in_unit(result$normalized_parameters$target_conc_internal, target_unit)
-  original_stock_str <- paste0(sig3(stock_val), " ", stock_unit)
+  # User inputs (target, stock, MW) are echoed as entered; only the converted
+  # stock concentration is a calculated value and is rounded
+  target_conc_fmt <- paste0(num_plain(target_val), " ", target_unit)
+  original_stock_str <- paste0(num_plain(stock_val), " ", stock_unit)
   label <- if (nzchar(substance)) substance else "substance"
 
   stock_line <- if (stock_type != target_type) {
     converted_stock_str <- paste0(sig3(effective_stock_val), " ", effective_stock_unit)
     paste0("Stock: ", original_stock_str, " = ", converted_stock_str,
-           " (MW: ", sig3(mw), " Da)")
+           " (MW: ", num_plain(mw), " Da)")
   } else {
     paste0("Stock: ", original_stock_str)
   }
@@ -209,7 +214,7 @@ calculate_dry_substance <- function(substance, mw,
   # Format instruction
   mass_fmt <- format_mass(mass_g)
   vol_fmt <- format_volume(vol_L)
-  target_fmt <- paste0(sig3(target_val), " ", target_unit)
+  target_fmt <- paste0(num_plain(target_val), " ", target_unit)   # as entered
   short_name <- if (nzchar(substance)) substance else "substance"
   if (is.null(label) || !nzchar(label)) {
     label <- if (nzchar(substance)) substance_label(substance, supplier, purity) else "substance"
@@ -231,6 +236,13 @@ calculate_dry_substance <- function(substance, mw,
   } else if (mass_g < 1e-3) {
     warnings <- c(warnings,
       "Very small mass. Use an analytical balance with adequate precision.")
+  }
+  if (purity_used < 1) {
+    # Typical slip: purity entered as a fraction (0.97) instead of percent (97)
+    warnings <- c(warnings,
+      paste0("Purity is ", format_purity(purity_used),
+             ": the mass to weigh is ", sig3(100 / purity_used),
+             "x the pure-substance mass. Check that purity is entered in percent (e.g. 97, not 0.97)."))
   }
 
   list(

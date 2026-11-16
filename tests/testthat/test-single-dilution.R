@@ -83,3 +83,15 @@ test_that("a volume below the smallest pipette is flagged in pipette mode", {
   r <- calculate_single_dilution(10, "mg/ml", 1, UGML, 1, "ml", precision = pipette_precision())
   expect_true(any(grepl("below the range of the smallest enabled pipette \\(P2\\)", r$warnings)))
 })
+
+test_that("the target concentration is echoed as entered, not rounded to 3 figures", {
+  # 1234 nM used to be printed as "1230 nM" while the volumes were for 1234 nM
+  r <- calculate_single_dilution(1, "mM", 1234, "nM", 10, "ml", solution_name = "X")
+  expect_match(r$instruction_text, "^1234 nM X in PBS")
+  expect_equal(r$steps[[1]]$stock_volume_L, 0.01 * 1234e-9 / 1e-3)
+})
+
+test_that("mass and molar concentrations cannot be mixed without an MW", {
+  expect_error(calculate_single_dilution(1, "mg/ml", 10, "nM", 1, "ml"),
+               "both be mass or both be molar")
+})

@@ -78,6 +78,16 @@ validate_single_dilution <- function(stock_val, stock_unit, target_val, target_u
 
   if (length(errors) > 0) return(list(ok = FALSE, errors = errors, warnings = warnings))
 
+  # Known units (a stock from the database may carry a hand-typed unit)
+  for (u in list(list(stock_unit, "Stock"), list(target_unit, "Target"))) {
+    if (get_conc_type(u[[1]]) == "unknown") {
+      errors <- c(errors,
+        paste0(u[[2]], " concentration unit '", u[[1]] %||% "", "' is not recognised. ",
+               "Supported units: ", paste(ALL_CONC_UNITS, collapse = ", "), "."))
+    }
+  }
+  if (length(errors) > 0) return(list(ok = FALSE, errors = errors, warnings = warnings))
+
   # Unit compatibility
   compat <- validate_unit_compatibility(stock_unit, target_unit)
   if (!compat$ok) {

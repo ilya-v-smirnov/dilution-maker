@@ -29,7 +29,7 @@ test_that("molar stock -> mass target: 1 M NaCl -> 1 mg/ml in 10 ml", {
   r <- calculate_mw_based_preparation("NaCl", 58.44, "manual", 1, "M", 1, "mg/ml", 10, "ml",
                                       diluent = "water")
   expect_equal(r$steps[[1]]$stock_volume_L, 0.01 / 58.44)
-  expect_match(r$instruction_text, "Stock: 1 M = 58.4 mg/ml (MW: 58.4 Da)", fixed = TRUE)
+  expect_match(r$instruction_text, "Stock: 1 M = 58.4 mg/ml (MW: 58.44 Da)", fixed = TRUE)
   expect_match(r$instruction_text, "0.171 ml stock + 9.83 ml water | DF: 58.4x", fixed = TRUE)
 })
 
@@ -38,4 +38,27 @@ test_that("same-type stock and target need no conversion line", {
   r <- calculate_mw_based_preparation("BSA", 66500, "Common proteins", 2, "mg/ml", 50, UGML, 2, "ml")
   expect_match(r$instruction_text, paste0("Stock: 2 mg/ml → 50 ", UGML, " in PBS"), fixed = TRUE)
   expect_match(r$instruction_text, paste0("50 ", UL, " stock + 1.95 ml PBS | DF: 40x"), fixed = TRUE)
+})
+
+test_that("MW, stock and target are echoed as entered", {
+  # glucose 180.16 Da used to be printed as "MW: 180 Da", 1234 nM as "1230 nM"
+  r <- calculate_mw_based_preparation("Glucose", 180.16, "manual", 1.2345, "mg/ml",
+                                      1234, "nM", 1, "ml")
+  expect_match(r$instruction_text, "Stock: 1.2345 mg/ml = ", fixed = TRUE)
+  expect_match(r$instruction_text, "(MW: 180.16 Da) → 1234 nM in PBS", fixed = TRUE)
+})
+
+test_that("a stock equal to the target needs no diluent and is not flagged as impossible", {
+  # 66.5 mg/ml BSA (66500 Da) is exactly 1 mM
+  r <- calculate_mw_based_preparation("BSA", 66500, "manual", 66.5, "mg/ml", 1, "mM", 1, "ml")
+  expect_equal(r$steps[[1]]$diluent_volume_L, 0)
+  expect_false(any(grepl("Negative diluent", r$warnings)))
+  # 0.3 mM written as 0.1 + 0.2: floating-point noise must not go negative
+  r <- calculate_single_dilution(0.1 + 0.2, "mM", 0.3, "mM", 1, "ml")
+  expect_equal(r$steps[[1]]$diluent_volume_L, 0)
+})
+
+test_that("an unknown unit is reported by name", {
+  expect_error(calculate_mw_based_preparation("X", 100, "manual", 1, "ug/ml", 1, "nM", 1, "ml"),
+               "Unknown concentration unit: 'ug/ml'")
 })

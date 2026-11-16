@@ -1,7 +1,7 @@
 # ==============================================================================
 # ui_mw_based.R
 # UI and server logic for MW-Based Preparation tab.
-# Uses molecular_weights_proteins.xlsx for MW lookup.
+# MW lookup: Common / Custom proteins databases (see R/mw_database.R).
 # Supports "Use available stock": variant dropdown filtered by the
 # currently-selected substance; autofills and locks Stock concentration.
 # ==============================================================================
@@ -189,6 +189,12 @@ mw_based_server <- function(id, memory, mw_db, stocks_db, pipettes_db) {
           paste0("No stocks found for '", info$substance,
                  "'. Add one in the Databases tab.")))
       }
+      s <- selected_stock()
+      if (!is.null(s) && get_conc_type(s$units) == "unknown") {
+        return(tags$div(class = "alert alert-danger small",
+          paste0("Stock concentration unit '", s$units, "' is not recognised. ",
+                 "Correct the stock in the Databases tab.")))
+      }
       NULL
     })
 
@@ -216,6 +222,20 @@ mw_based_server <- function(id, memory, mw_db, stocks_db, pipettes_db) {
       }
     }, ignoreInit = FALSE)
 
+    # --- Stock concentration actually used in the calculation ---
+    # With "Use available stock" the values come straight from the database
+    # row, not from the (locked) input fields: those are filled through a
+    # browser round trip and may briefly lag behind, and a unit the dropdown
+    # does not offer could not be shown in them at all.
+    stock_input <- reactive({
+      s <- selected_stock()
+      if (isTRUE(input$use_stock) && !is.null(s)) {
+        list(val = s$conc, unit = s$units)
+      } else {
+        list(val = input$stock_val, unit = input$stock_unit)
+      }
+    })
+
     # --- Effective substance label (with stock suffix when applicable) ---
     effective_substance_label <- reactive({
       info <- current_mw()
@@ -231,21 +251,22 @@ mw_based_server <- function(id, memory, mw_db, stocks_db, pipettes_db) {
       info <- current_mw()
       req(info$mw)
       req(!is.na(info$mw), info$mw > 0)
-      req(input$stock_val, input$target_val, input$final_vol)
-      req(input$stock_val > 0, input$target_val > 0, input$final_vol > 0)
-      prec <- precision()
-
       if (isTRUE(input$use_stock)) {
         # Only proceed when a stock is actually resolved
         req(selected_stock())
       }
+      stock <- stock_input()
+      req(get_conc_type(stock$unit) != "unknown")   # reported in stock_match_msg
+      req(stock$val, input$target_val, input$final_vol)
+      req(stock$val > 0, input$target_val > 0, input$final_vol > 0)
+      prec <- precision()
 
       calculate_mw_based_preparation(
         substance         = effective_substance_label(),
         mw                = info$mw,
         mw_source         = info$source,
-        stock_val         = input$stock_val,
-        stock_unit        = input$stock_unit,
+        stock_val         = stock$val,
+        stock_unit        = stock$unit,
         target_val        = input$target_val,
         target_unit       = input$target_unit,
         final_vol         = input$final_vol,

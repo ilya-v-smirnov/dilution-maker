@@ -38,3 +38,10 @@ test_that("pipetting warnings follow the 0.5 / 1 / 2 µl thresholds", {
   expect_match(pipetting_warnings(volume_to_L(1.5, UL)), "Small volume")
   expect_length(pipetting_warnings(volume_to_L(5, UL)), 0)
 })
+
+test_that("an unrecognised unit is named in the error", {
+  v <- validate_single_dilution(1, "g/L", 1, "ng/ml", 1, "ml")
+  expect_false(v$ok)
+  expect_match(v$errors, "Stock concentration unit 'g/L' is not recognised")
+  expect_false(validate_single_dilution(1, NULL, 1, "ng/ml", 1, "ml")$ok)   # no crash
+})

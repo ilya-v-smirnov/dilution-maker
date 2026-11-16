@@ -1,7 +1,7 @@
 # ==============================================================================
 # ui_dry_substance.R
 # UI and server logic for Dry Substance Preparation tab
-# Uses molecular_weights_substances.xlsx
+# MW lookup: Common / Custom substances databases (see R/mw_database.R)
 # ==============================================================================
 
 dry_substance_ui <- function(id) {
@@ -201,7 +201,7 @@ dry_substance_server <- function(id, memory, mw_db) {
           format(tm$mw, big.mark = ","),
           format_mass(tm$mass_g),
           format_mass(tm$mass_pure_g),
-          paste0(sig3(ip$target_concentration), " ", ip$target_unit),
+          paste0(num_plain(ip$target_concentration), " ", ip$target_unit),
           format_volume(res$normalized_parameters$final_vol_L),
           ip$solvent
         ),

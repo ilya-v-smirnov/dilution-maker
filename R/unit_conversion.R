@@ -22,9 +22,23 @@ is_molar_conc <- function(unit) {
 }
 
 get_conc_type <- function(unit) {
+  if (is.null(unit) || length(unit) != 1 || is.na(unit)) return("unknown")
   if (is_mass_conc(unit)) return("mass")
   if (is_molar_conc(unit)) return("molar")
   return("unknown")
+}
+
+#' Map hand-typed spellings of a concentration unit to the canonical one:
+#' "mg/mL", "ug/ml", "mcg/ml" or a Greek-mu "ug/ml" (as typed in Excel)
+#' become "mg/ml" / the micro-sign "ug/ml". Unrecognised units are returned
+#' trimmed but otherwise unchanged, so callers can report them.
+canonical_conc_unit <- function(unit) {
+  u <- trimws(as.character(unit))
+  key <- tolower(gsub("\\s+", "", u))
+  key <- gsub("\u03bc", "\u00b5", key)          # Greek mu -> micro sign
+  key <- sub("^(u|mc)(?=g/|m$)", "\u00b5", key, perl = TRUE)
+  idx <- match(key, tolower(ALL_CONC_UNITS))
+  ifelse(is.na(idx), u, ALL_CONC_UNITS[idx])
 }
 
 are_compatible_units <- function(unit1, unit2) {

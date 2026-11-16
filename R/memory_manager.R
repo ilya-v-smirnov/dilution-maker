@@ -20,8 +20,8 @@ init_memory <- function() {
 #' @return Updated memory list
 save_to_memory <- function(memory, result) {
   scenario <- result$scenario_type
-  if (!scenario %in% names(memory)) {
-    warning(paste("Unknown scenario type:", scenario))
+  if (!is.character(scenario) || length(scenario) != 1 || !scenario %in% names(memory)) {
+    warning(paste("Unknown scenario type:", paste(scenario, collapse = ", ")))
     return(memory)
   }
 

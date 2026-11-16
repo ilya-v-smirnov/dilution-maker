@@ -270,13 +270,19 @@ mw_database_server <- function(id, proteins_db, substances_db, stocks_db,
                         "increment, \u00b5l", "enabled")
         return(out)
       }
-      if ("MW" %in% names(out)) out$MW <- format(out$MW, big.mark = ",")
+      # Format each value on its own: format() on a whole column pads every
+      # number to the same width and decimals ("58.44" -> "   58.44")
+      fmt_each <- function(x, ...) vapply(x, function(v) {
+        if (is.na(v)) "" else trimws(format(v, digits = 15, scientific = FALSE,
+                                             drop0trailing = TRUE, ...))
+      }, character(1), USE.NAMES = FALSE)
+      if ("MW" %in% names(out)) out$MW <- fmt_each(out$MW, big.mark = ",")
       if ("purity" %in% names(out)) {
         out$purity <- sub("%$", "", format_purity(out$purity))
         names(out)[names(out) == "purity"] <- "purity, %"
         names(out)[names(out) == "cat"] <- "cat#"
       }
-      if ("conc" %in% names(out)) out$conc <- format(out$conc)
+      if ("conc" %in% names(out)) out$conc <- fmt_each(out$conc)
       out
     }, striped = TRUE, hover = TRUE, width = "100%")
 

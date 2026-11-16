@@ -62,3 +62,17 @@ test_that("small masses produce balance warnings", {
   expect_match(calculate_dry_substance("X", 100, 1, "mM", 1, "ml")$warnings, "analytical balance")
   expect_match(calculate_dry_substance("X", 100, 1, UM, 1, "ml")$warnings, "Extremely small mass")
 })
+
+test_that("a purity below 1% is flagged as a likely fraction-for-percent slip", {
+  # 0.97 entered instead of 97: the mass is multiplied by 103
+  r <- calculate_dry_substance("NaCl", 58.44, 100, "mM", 100, "ml", purity = 0.97)
+  expect_equal(r$technical_metadata$mass_g, 0.5844 / 0.0097)
+  expect_true(any(grepl("entered in percent", r$warnings)))
+  ok <- calculate_dry_substance("NaCl", 58.44, 100, "mM", 100, "ml", purity = 97)
+  expect_false(any(grepl("entered in percent", ok$warnings)))
+})
+
+test_that("the target concentration of a dry preparation is echoed as entered", {
+  r <- calculate_dry_substance("NaCl", 58.44, 154.5, "mM", 1, "L")
+  expect_match(r$instruction_text, "^154.5 mM NaCl in Water")
+})

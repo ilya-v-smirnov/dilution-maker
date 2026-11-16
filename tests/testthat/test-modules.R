@@ -153,3 +153,87 @@ test_that("Databases tab adds stocks and pipettes", {
     expect_false("Pbad" %in% a$pipettes_db()$data$name)
   })
 })
+
+stock_row <- function(conc, units, substance = "IgG") {
+  list(data = data.frame(substance = substance, date = "01.01.2026", conc = conc,
+                         units = units, comments = "", stringsAsFactors = FALSE),
+       sheet_name = "Available stocks")
+}
+
+test_that("an available stock is used directly, whatever the locked fields show", {
+  a <- module_args()
+  a$stocks_db(stock_row(2, "mg/ml"))
+  testServer(single_dilution_server,
+             args = list(memory = a$memory, stocks_db = a$stocks_db, pipettes_db = a$pipettes_db), {
+    # the stock fields still hold the values of a previous calculation
+    session$setInputs(use_stock = TRUE, stock_substance = "IgG", stock_variant = "01.01.2026",
+                      stock_val = 999, stock_unit = "M", target_val = 20, target_unit = UGML,
+                      final_vol = 1, final_vol_unit = "ml", diluent = "PBS", use_approx = TRUE,
+                      precision_mode = "manual", stock_precision = 3, diluent_precision = 3)
+    expect_match(output$instruction_text, paste0("10 ", UL, " stock + 0.99 ml PBS | DF: 100x"),
+                 fixed = TRUE)
+  })
+})
+
+test_that("a stock with an unrecognised unit is reported instead of silently miscalculated", {
+  a <- module_args()
+  a$stocks_db(stock_row(2, "g/L"))
+  testServer(single_dilution_server,
+             args = list(memory = a$memory, stocks_db = a$stocks_db, pipettes_db = a$pipettes_db), {
+    session$setInputs(use_stock = TRUE, stock_substance = "IgG", stock_variant = "01.01.2026",
+                      stock_val = 2, stock_unit = "mg/ml", target_val = 20, target_unit = UGML,
+                      final_vol = 1, final_vol_unit = "ml", diluent = "PBS", use_approx = TRUE,
+                      precision_mode = "manual", stock_precision = 3, diluent_precision = 3)
+    expect_error(output$instruction_text)
+    expect_match(as.character(output$errors_ui$html), "g/L.+is not recognised")
+    session$setInputs(save_btn = 1)
+    expect_equal(count_saved(a$memory()), 0)
+  })
+  testServer(multistep_dilution_server,
+             args = list(memory = a$memory, stocks_db = a$stocks_db, pipettes_db = a$pipettes_db), {
+    session$setInputs(use_stock = TRUE, stock_substance = "IgG", stock_variant = "01.01.2026",
+                      stock_val = 2, stock_unit = "mg/ml", target_val = 1, target_unit = "ng/ml",
+                      final_vol = 1, final_vol_unit = "ml", diluent = "PBS",
+                      max_df = 500, min_pipette = 0.5, intermediate_vol = 500,
+                      precision_mode = "manual", stock_precision = 3, diluent_precision = 3)
+    expect_error(output$instruction_text)
+    expect_match(as.character(output$errors_ui$html), "is not recognised")
+  })
+})
+
+test_that("MW-Based tab takes concentration and unit from the selected stock", {
+  a <- module_args()
+  a$stocks_db(stock_row(2, "mg/ml", substance = "IgG (human)"))
+  testServer(mw_based_server,
+             args = list(memory = a$memory, mw_db = a$proteins_db, stocks_db = a$stocks_db,
+                         pipettes_db = a$pipettes_db), {
+    session$setInputs(mw_source = "Common proteins", substance_db = "IgG (human)",
+                      use_stock = TRUE, stock_variant = "01.01.2026",
+                      stock_val = 1, stock_unit = "mg/ml",         # stale field values
+                      target_val = 10, target_unit = "nM", final_vol = 1, final_vol_unit = "ml",
+                      diluent = "PBS", precision_mode = "manual",
+                      stock_precision = 3, diluent_precision = 3)
+    # 2 mg/ml = 13333 nM -> DF 1333, 0.75 µl
+    expect_match(output$instruction_text, "Stock: 2 mg/ml = 13300 nM (MW: 150000 Da)", fixed = TRUE)
+    expect_match(output$instruction_text, paste0("0.75 ", UL, " stock + 1 ml PBS | DF: 1330x"),
+                 fixed = TRUE)
+
+    a$stocks_db(stock_row(2, "g/L", substance = "IgG (human)"))
+    session$flushReact()
+    expect_error(output$instruction_text)
+    expect_match(as.character(output$stock_match_msg$html), "is not recognised")
+  })
+})
+
+test_that("Multi-Step Planner tab rejects a max DF of 1 with a message", {
+  a <- module_args()
+  testServer(multistep_dilution_server,
+             args = list(memory = a$memory, stocks_db = a$stocks_db, pipettes_db = a$pipettes_db), {
+    session$setInputs(stock_val = 10, stock_unit = "mg/ml", target_val = 1, target_unit = "ng/ml",
+                      final_vol = 10, final_vol_unit = "ml", diluent = "PBS", solution_name = "",
+                      use_stock = FALSE, max_df = 1, min_pipette = 0.5, intermediate_vol = 500,
+                      precision_mode = "manual", stock_precision = 3, diluent_precision = 3)
+    expect_error(output$instruction_text)
+    expect_match(as.character(output$errors_ui$html), "Max DF per step must be greater than 1")
+  })
+})

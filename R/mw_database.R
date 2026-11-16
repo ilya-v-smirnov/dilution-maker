@@ -348,8 +348,10 @@ load_stocks_db <- function(data_dir = "data") {
         }
         loaded$substance <- as.character(loaded$substance)
         loaded$date      <- as.character(loaded$date)
-        loaded$conc      <- as.numeric(loaded$conc)
-        loaded$units     <- as.character(loaded$units)
+        loaded$conc      <- suppressWarnings(as.numeric(loaded$conc))
+        # Units typed by hand in Excel ("mg/mL", Greek-mu "ug/ml", "mcg/ml")
+        # would otherwise not match the app's unit list
+        loaded$units     <- canonical_conc_unit(loaded$units)
         loaded$comments  <- as.character(loaded$comments)
         loaded$comments[is.na(loaded$comments)] <- ""
         loaded$date[is.na(loaded$date)]         <- ""

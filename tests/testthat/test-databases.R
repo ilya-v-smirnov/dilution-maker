@@ -84,3 +84,19 @@ test_that("pipettes round-trip with groups (incl. an empty group)", {
   expect_equal(nrow(enabled_pipettes(re, DEFAULT_PIPETTE_GROUP)), 5)
   expect_equal(nrow(group_pipettes(re, "Tissue culture")), 0)
 })
+
+test_that("stocks edited by hand in Excel load with canonical units", {
+  d <- local_data_dir()
+  dir.create(file.path(d, PRIVATE_DATA_DIR))
+  greek_mu <- intToUtf8(0x3bc)
+  openxlsx::write.xlsx(
+    data.frame(substance = c("A", "B", "C", "D"), date = "01.01.2026",
+               conc = c("5", "2", "abc", "1"),
+               units = c(paste0(greek_mu, "g/ml"), "mg/mL", "nM", "g/L"),
+               comments = "", stringsAsFactors = FALSE),
+    db_file_path(d, "stocks"))
+  expect_no_warning(s <- load_stocks_db(d)$data)
+  expect_equal(s$units, c(UGML, "mg/ml", "nM", "g/L"))    # unknown unit kept for reporting
+  expect_true(all(s$units[1:3] %in% ALL_CONC_UNITS))
+  expect_equal(s$conc, c(5, 2, NA, 1))                    # non-numeric -> NA, no crash
+})

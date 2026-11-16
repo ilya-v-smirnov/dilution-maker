@@ -58,3 +58,42 @@ test_that("ceiling_signif rounds up to the given significant figures", {
   expect_equal(ceiling_signif(0.00111, 2), 0.0012)
   expect_equal(ceiling_signif(1.2, 2), 1.2)
 })
+
+test_that("an intermediate keeps a reserve over what the next step takes", {
+  # 1 mg/ml -> 1 µg/ml in 15.8 ml, max DF 100: 2 steps of 31.62x.
+  # Step 2 takes 15.8 ml / 31.62 = 499.6 µl: a 500 µl intermediate would have
+  # to be emptied to the last drop, so it is enlarged to 499.6 * 1.1 -> 550 µl
+  r <- plan_multistep_dilution(1, "mg/ml", 1, UGML, 15.8, "ml", max_df_per_step = 100)
+  expect_equal(r$technical_metadata$n_steps, 2)
+  taken_L <- r$steps[[2]]$stock_volume_L
+  expect_equal(taken_L, 15.8e-3 / sqrt(1000))
+  expect_equal(r$steps[[1]]$total_volume_L, 550e-6)
+  expect_gte(r$steps[[1]]$total_volume_L, taken_L * 1.1)
+  expect_true(any(grepl("Intermediate 1 volume increased", r$warnings)))
+})
+
+test_that("every intermediate covers the next transfer with a 10% reserve", {
+  for (vol_ml in c(0.1, 1, 15.8, 50, 400)) {
+    r <- plan_multistep_dilution(10, "mg/ml", 1, "ng/ml", vol_ml, "ml", max_df_per_step = 100)
+    s <- r$steps
+    for (i in seq_len(length(s) - 1)) {
+      expect_gte(s[[i]]$total_volume_L, s[[i + 1]]$stock_volume_L * 1.1 * (1 - 1e-9))
+    }
+  }
+})
+
+test_that("the planner rejects inputs it cannot plan", {
+  # max DF 1 used to crash ("vector size cannot be infinite"); a stock below
+  # the target used to produce a plan with negative diluent volumes
+  expect_error(plan_multistep_dilution(10, "mg/ml", 1, "ng/ml", 10, "ml", max_df_per_step = 1),
+               "Max DF per step must be greater than 1")
+  expect_error(plan_multistep_dilution(1, "ng/ml", 1, "mg/ml", 10, "ml"),
+               "greater than target")
+  expect_error(plan_multistep_dilution(1, "mg/ml", 1, "nM", 10, "ml"),
+               "both be mass or both be molar")
+})
+
+test_that("the target concentration of a plan is echoed as entered", {
+  r <- plan_multistep_dilution(10, "mg/ml", 1234, "pg/ml", 10, "ml")
+  expect_match(r$instruction_text, "^1234 pg/ml solution in PBS")
+})

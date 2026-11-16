@@ -31,6 +31,9 @@ calculate_single_dilution <- function(stock_val, stock_unit,
   target_norm <- normalize_concentration(target_val, target_unit)
   vol_norm <- normalize_volume(final_vol, final_vol_unit)
 
+  if (stock_norm$type != target_norm$type) {
+    stop("Stock and target concentrations must both be mass or both be molar.")
+  }
   conc_type <- stock_norm$type  # mass or molar
 
   # Dilution factor
@@ -48,6 +51,9 @@ calculate_single_dilution <- function(stock_val, stock_unit,
     # Exact: V_stock = V_final * C_target / C_stock
     stock_vol_L <- final_vol_L * target_norm$value / stock_norm$value
     diluent_vol_L <- final_vol_L - stock_vol_L
+    # Stock equal to target (e.g. after an MW conversion): floating-point
+    # noise must not turn "no diluent" into a tiny negative volume
+    if (abs(diluent_vol_L) < 1e-9 * final_vol_L) diluent_vol_L <- 0
     approximation_used <- FALSE
   }
 
@@ -79,7 +85,7 @@ calculate_single_dilution <- function(stock_val, stock_unit,
   }
 
   # Build instruction text (plain and with pipette names)
-  target_conc_fmt <- format_conc_in_unit(target_norm$value, target_unit)
+  target_conc_fmt <- paste0(num_plain(target_val), " ", target_unit)   # as entered
 
   label <- if (nzchar(solution_name)) solution_name else "solution"
 

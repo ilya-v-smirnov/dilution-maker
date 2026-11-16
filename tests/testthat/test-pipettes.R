@@ -52,3 +52,24 @@ test_that("pipette table cleaning fills defaults and drops invalid rows", {
 test_that("pipette labels are human-readable", {
   expect_equal(pipette_label("P20", 2, 20, 0.02), paste0("P20 (2–20 ", UL, ", step 0.02 ", UL, ")"))
 })
+
+test_that("increments that are not 1, 2 or 5 x 10^n keep all their decimals", {
+  # the number of decimals used to follow only the order of magnitude:
+  # 3.25 µl was shown as "3.2 µl" and 1.025 ml as "1.02 ml"
+  expect_equal(decimals_needed(0.02), 2)
+  expect_equal(decimals_needed(0.25), 2)
+  expect_equal(decimals_needed(2.5), 1)
+  expect_equal(decimals_needed(20), 0)
+  expect_equal(format_volume_increment(3.25e-6, 0.25), paste("3.25", UL))
+  expect_equal(format_volume_increment(12.5e-6, 2.5), paste("12.5", UL))
+  expect_equal(format_volume_increment(1.025e-3, 25), "1.025 ml")
+  expect_equal(format_volume_increment(3.3e-6, 0.25), paste("3.25", UL))
+  expect_equal(format_volume_increment(5e-6, 0.25), paste("5", UL))   # trailing zeros dropped
+})
+
+test_that("pipettes with an impossible range are dropped when a file is loaded", {
+  raw <- data.frame(name = c("ok", "negative", "reversed", "empty"),
+                    min_volume = c(2, -1, 10, 5), max_volume = c(20, 5, 2, 5),
+                    increment = 0.1, stringsAsFactors = FALSE)
+  expect_equal(clean_pipettes_df(raw)$name, "ok")
+})

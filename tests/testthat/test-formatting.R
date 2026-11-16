@@ -39,3 +39,19 @@ test_that("concentrations and dilution factors are formatted", {
   expect_equal(format_df(170), "170x")
   expect_equal(format_df(6.6667), "6.67x")
 })
+
+test_that("sig_n is not capped at 7 significant figures", {
+  # format() defaults to 7 significant digits; manual precision allows up to 10
+  expect_equal(sig_n(123.456789, 9), "123.456789")
+  expect_equal(sig_n(123.456789, 8), "123.45679")
+  expect_equal(format_volume_sig(9.94117647e-3, 8), "9.9411765 ml")
+  expect_equal(sig_n(0.1 + 0.2, 10), "0.3")                  # no floating-point noise
+})
+
+test_that("num_plain echoes a number as entered", {
+  expect_equal(num_plain(1234), "1234")                      # sig3 would give 1230
+  expect_equal(num_plain(58.44), "58.44")
+  expect_equal(num_plain(148123.45), "148123.45")
+  expect_equal(num_plain(0.00000012), "0.00000012")
+  expect_equal(num_plain(10), "10")
+})

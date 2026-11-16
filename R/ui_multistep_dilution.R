@@ -154,6 +154,20 @@ multistep_dilution_server <- function(id, memory, stocks_db, pipettes_db) {
       }
     }, ignoreInit = FALSE)
 
+    # --- Stock concentration actually used in the calculation ---
+    # With "Use available stock" the values come straight from the database
+    # row, not from the (locked) input fields: those are filled through a
+    # browser round trip and may briefly lag behind, and a unit the dropdown
+    # does not offer could not be shown in them at all.
+    stock_input <- reactive({
+      s <- selected_stock()
+      if (isTRUE(input$use_stock) && !is.null(s)) {
+        list(val = s$conc, unit = s$units)
+      } else {
+        list(val = input$stock_val, unit = input$stock_unit)
+      }
+    })
+
     effective_solution_name <- reactive({
       if (isTRUE(input$use_stock)) {
         s <- selected_stock()
@@ -168,7 +182,7 @@ multistep_dilution_server <- function(id, memory, stocks_db, pipettes_db) {
     # --- Input validation (errors are shown to the user) ---
     validation <- reactive({
       val <- validate_single_dilution(
-        input$stock_val, input$stock_unit,
+        stock_input()$val, stock_input()$unit,
         input$target_val, input$target_unit,
         input$final_vol, input$final_vol_unit
       )
@@ -201,8 +215,8 @@ multistep_dilution_server <- function(id, memory, stocks_db, pipettes_db) {
       }
 
       plan_multistep_dilution(
-        stock_val      = input$stock_val,
-        stock_unit     = input$stock_unit,
+        stock_val      = stock_input()$val,
+        stock_unit     = stock_input()$unit,
         target_val     = input$target_val,
         target_unit    = input$target_unit,
         final_vol      = input$final_vol,

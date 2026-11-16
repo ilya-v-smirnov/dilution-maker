@@ -16,9 +16,17 @@ sig_n <- function(x, n = 3) {
   if (is.null(x) || length(x) == 0 || is.na(x) || !is.finite(x)) return("NA")
   if (x == 0) return("0")
   if (is.null(n) || is.na(n) || !is.numeric(n) || n < 1) n <- 3
-  n <- as.integer(n)
+  n <- min(as.integer(n), 15L)
   s <- signif(x, n)
-  trimws(format(s, scientific = FALSE))
+  # digits = 15: format() would otherwise cap the output at 7 significant digits
+  trimws(format(s, digits = 15, scientific = FALSE))
+}
+
+#' A number exactly as entered (no rounding, no scientific notation, no
+#' trailing zeros). Used to echo user inputs (target concentration, MW, ...)
+#' in instructions, where rounding to 3 significant figures would misstate them.
+num_plain <- function(x) {
+  trimws(format(x, digits = 15, scientific = FALSE, drop0trailing = TRUE))
 }
 
 #' Format volume with auto-chosen unit (from internal L)

@@ -62,3 +62,9 @@ test_that("sorting by name, target and volume", {
                                        list(list(key = "volume", desc = TRUE)))
   expect_equal(names_of(by_vol_desc), c("Alpha", "beta", ""))
 })
+
+test_that("a result without a scenario type is ignored with a warning", {
+  m <- init_memory()
+  expect_warning(m2 <- save_to_memory(m, list()), "Unknown scenario type")
+  expect_equal(count_saved(m2), 0)
+})

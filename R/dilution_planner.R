@@ -37,9 +37,20 @@ plan_multistep_dilution <- function(stock_val, stock_unit,
   target_norm <- normalize_concentration(target_val, target_unit)
   vol_norm <- normalize_volume(final_vol, final_vol_unit)
 
+  if (stock_norm$type != target_norm$type) {
+    stop("Stock and target concentrations must both be mass or both be molar.")
+  }
+  if (!is.numeric(max_df_per_step) || !is.finite(max_df_per_step) || max_df_per_step <= 1) {
+    stop("Max DF per step must be greater than 1.")
+  }
+
   conc_type <- stock_norm$type
   total_df <- stock_norm$value / target_norm$value
   final_vol_L <- vol_norm$value
+
+  if (!is.finite(total_df) || total_df <= 1) {
+    stop("Stock concentration must be greater than target concentration.")
+  }
 
   # Determine number of steps needed (the small tolerance guards against
   # floating-point error when total_df is an exact power of max_df_per_step)
@@ -54,13 +65,14 @@ plan_multistep_dilution <- function(stock_val, stock_unit,
 
   # Volume prepared in each step. Working backwards from the final volume,
   # an intermediate must hold at least what the next step takes from it;
-  # if the preferred volume is too small, it is enlarged (+10% reserve).
+  # if the preferred volume does not cover that with a 10% reserve (a tube
+  # cannot be emptied to the last drop), it is enlarged.
   plan_step_volumes <- function(n, df_step) {
     vols <- numeric(n)
     vols[n] <- final_vol_L
     for (i in rev(seq_len(n - 1))) {
       needed_L <- vols[i + 1] / df_step
-      vols[i] <- if (needed_L > intermediate_vol_L) {
+      vols[i] <- if (needed_L * 1.1 > intermediate_vol_L * (1 + 1e-9)) {
         ceiling_signif(needed_L * 1.1, 2)
       } else {
         intermediate_vol_L
@@ -75,7 +87,7 @@ plan_multistep_dilution <- function(stock_val, stock_unit,
   repeat {
     df_per_step <- total_df^(1 / n_steps)
     step_vols_L <- plan_step_volumes(n_steps, df_per_step)
-    transfer_ok <- all(step_vols_L / df_per_step >= min_pipette_vol_L)
+    transfer_ok <- all(step_vols_L / df_per_step >= min_pipette_vol_L * (1 - 1e-9))
     if (transfer_ok || n_steps >= max_steps || final_vol_L < min_pipette_vol_L) break
     n_steps <- n_steps + 1
   }
@@ -155,7 +167,7 @@ plan_multistep_dilution <- function(stock_val, stock_unit,
 
   # Build instruction text (plain and with pipette names)
   label <- if (nzchar(solution_name)) solution_name else "solution"
-  target_conc_fmt <- format_conc_in_unit(target_norm$value, target_unit)
+  target_conc_fmt <- paste0(num_plain(target_val), " ", target_unit)   # as entered
 
   build_instruction <- function(show_pipettes) {
     lines <- c(

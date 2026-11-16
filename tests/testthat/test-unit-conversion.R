@@ -58,3 +58,20 @@ test_that("best display units follow the thresholds", {
   expect_equal(best_molar_conc_unit(1e-8), "nM")
   expect_equal(best_molar_conc_unit(5e-10), "pM")
 })
+
+test_that("hand-typed unit spellings map to the canonical units", {
+  greek_mu <- intToUtf8(0x3bc)                     # what Excel users usually type
+  expect_equal(canonical_conc_unit(paste0(greek_mu, "g/ml")), UGML)
+  expect_equal(canonical_conc_unit(paste0(greek_mu, "M")), UM)
+  expect_equal(canonical_conc_unit(c("mg/mL", " ug/ml ", "mcg/mL", "uM", "MG/ML")),
+               c("mg/ml", UGML, UGML, UM, "mg/ml"))
+  expect_equal(canonical_conc_unit(ALL_CONC_UNITS), ALL_CONC_UNITS)   # canonical unchanged
+  expect_equal(canonical_conc_unit(c("g/L", "units", "%")), c("g/L", "units", "%"))
+  expect_true(is.na(canonical_conc_unit(NA)))
+})
+
+test_that("a missing unit has an unknown concentration type", {
+  expect_equal(get_conc_type(NULL), "unknown")
+  expect_equal(get_conc_type(NA), "unknown")
+  expect_equal(get_conc_type(character(0)), "unknown")
+})
